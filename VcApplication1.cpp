@@ -1,7 +1,8 @@
-#include <iostream>
+﻿#include <iostream>
 #include <fstream>
 #include <string>
 #include <thread>
+#include <list>
 
 #include <queue>
 #include <mutex>
@@ -15,20 +16,7 @@ class WorkItem
 public:
 	int socket;
 	char buffer[256];
-
-	WorkItem();
-	~WorkItem();
-
-private:
 };
-
-WorkItem::WorkItem()
-{
-}
-
-WorkItem::~WorkItem()
-{
-}
 
 template <typename T> class BlockingQueue
 {
@@ -36,26 +24,25 @@ public:
 
 	T pop()
 	{
-		T item;
-		if (!completed)
+		T item = NULL;
+		std::unique_lock<std::mutex> mlock(mutex);
+		while (queue.empty() && !completed)
 		{
-			std::unique_lock<std::mutex> mlock(mutex_);
-			while (queue_.empty() && !completed)
-			{
-				cond_.wait(mlock);
-			}
-
-			if (!completed)
-			{
-				item = queue_.front();
-				queue_.pop();
-			}
+			condition_variable.wait(mlock);
 		}
+
+		//lock{		
+		if (!queue.empty())
+		{
+			item = queue.front();
+			queue.pop();
+		}
+		//}
 
 		return item;
 	}
 
-	void pop(T& item)
+	/*void pop(T& item)
 	{
 		std::unique_lock<std::mutex> mlock(mutex_);
 		while (queue_.empty())
@@ -65,72 +52,76 @@ public:
 
 		item = queue_.front();
 		queue_.pop();
-	}
+	}*/
 
 	void push(T& item)
 	{
-		std::unique_lock<std::mutex> mlock(mutex_);
-		queue_.push(item);
+		std::unique_lock<std::mutex> mlock(mutex);
+		queue.push(item);
 		mlock.unlock();
-		cond_.notify_one();
+		condition_variable.notify_one();
 	}
 
-	void push(T&& item)
+	/*void push(T&& item)
 	{
 		std::unique_lock<std::mutex> mlock(mutex_);
 		queue_.push(std::move(item));
 		mlock.unlock();
 		cond_.notify_one();
-	}
+	}*/
 
 	void finalise()
 	{
 		completed = true;
-		cond_.notify_all();
+		condition_variable.notify_all();
 	}
 
 private:
-	std::queue<T> queue_;
-	std::mutex mutex_;
-	std::condition_variable cond_;
+	std::queue<T> queue;
+	std::mutex mutex;
+	std::condition_variable condition_variable;
 	bool completed;
 };
 
-void handle_requests(int client_socket, BlockingQueue<WorkItem>* processing_queue)
+
+const char delimiter[] = {'\r', '\n','\r','\n' };
+
+void handle_requests(int client_socket, BlockingQueue<WorkItem*>* processing_queue)
 {
-	char buffer[256];
 	int  count;
+	const int size = 1024;
+	char buffer[size];
+	std::list<char> byteBag;
 	do
 	{
-		memset(buffer, 0, 256);
-		count = recv(client_socket, buffer, 255, 0);
-		WorkItem* l = new WorkItem();
-		l->socket = client_socket;
-		strcpy(l->buffer, buffer);
-		processing_queue->push(*l);
-		processing_queue->finalise();
+		memset(buffer, 0, size);
+		count = recv(client_socket, buffer, size, 0);
+		const char* i = delimiter;
+		int i2 = 10;
+		//l->socket = client_socket;
+		//processing_queue->push(l);
+		//processing_queue->finalise();
 	} while (count > 0);
 }
 
-void process_requests(int client_socket, BlockingQueue<WorkItem>* processing_queue)
+void process_requests(int client_socket, BlockingQueue<WorkItem*>* processing_queue)
 {
-	WorkItem l;
-	bool process = true;
+	WorkItem* l;
 	do
 	{
 		l = processing_queue->pop();
-		process = &l != nullptr;
-		if (process)
+		if (l != NULL)
 		{
-			int s = l.socket;
-			printf("%s", l.buffer);
-			int count = send(client_socket, "200", 18, 0);
-			//delete &l;
+			int s = l->socket;
+			printf("%s", l->buffer);
+			//int count = send(client_socket, "200", 18, 0);
+			delete l;
 		}
 
-	} while (process);
+	} while (l != NULL);
 
 	closesocket(client_socket);
+	printf("socket closed");
 }
 
 void accept_requests(int server_socket)
@@ -139,8 +130,8 @@ void accept_requests(int server_socket)
 	int length = sizeof(client_socket_address);
 	while (true)
 	{
-		int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, &length);	
-		BlockingQueue<WorkItem>* processing_queue = new BlockingQueue<WorkItem>();	
+		int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, &length);
+		BlockingQueue<WorkItem*>* processing_queue = new BlockingQueue<WorkItem*>();
 		std::thread handler_thread(handle_requests, client_socket, processing_queue);
 		handler_thread.detach();
 		std::thread process_thread(process_requests, client_socket, processing_queue);
