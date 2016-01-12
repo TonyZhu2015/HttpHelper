@@ -3,7 +3,6 @@
 #include <string>
 #include <thread>
 #include <list>
-
 #include <queue>
 #include <mutex>
 #include <condition_variable>
@@ -11,14 +10,14 @@
 #include <winsock2.h>
 #pragma comment(lib, "Ws2_32.lib")
 
-class WorkItem
+class work_item
 {
 public:
 	int socket;
 	char buffer[256];
 };
 
-template <typename T> class BlockingQueue
+template <typename T> class blocking_queue
 {
 public:
 
@@ -31,14 +30,14 @@ public:
 			condition_variable.wait(mlock);
 		}
 
-		//lock{		
+		mtx.lock();
 		if (!queue.empty())
 		{
 			item = queue.front();
 			queue.pop();
 		}
-		//}
-
+		
+		mtx.unlock();
 		return item;
 	}
 
@@ -79,17 +78,17 @@ public:
 private:
 	std::queue<T> queue;
 	std::mutex mutex;
+	std::mutex mtx;
 	std::condition_variable condition_variable;
 	bool completed;
 };
 
-
 const char delimiter[] = {'\r', '\n','\r','\n' };
+const int size = 1024;
 
-void handle_requests(int client_socket, BlockingQueue<WorkItem*>* processing_queue)
+void handle_requests(int client_socket, blocking_queue<work_item*>* processing_queue)
 {
 	int  count;
-	const int size = 1024;
 	char buffer[size];
 	std::list<char> byteBag;
 	do
@@ -104,9 +103,9 @@ void handle_requests(int client_socket, BlockingQueue<WorkItem*>* processing_que
 	} while (count > 0);
 }
 
-void process_requests(int client_socket, BlockingQueue<WorkItem*>* processing_queue)
+void process_requests(int client_socket, blocking_queue<work_item*>* processing_queue)
 {
-	WorkItem* l;
+	work_item* l;
 	do
 	{
 		l = processing_queue->pop();
@@ -131,7 +130,7 @@ void accept_requests(int server_socket)
 	while (true)
 	{
 		int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, &length);
-		BlockingQueue<WorkItem*>* processing_queue = new BlockingQueue<WorkItem*>();
+		blocking_queue<work_item*>* processing_queue = new blocking_queue<work_item*>();
 		std::thread handler_thread(handle_requests, client_socket, processing_queue);
 		handler_thread.detach();
 		std::thread process_thread(process_requests, client_socket, processing_queue);
