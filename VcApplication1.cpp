@@ -14,7 +14,7 @@ class work_item
 {
 public:
 	int socket;
-	char buffer[256];
+	char* buffer;
 };
 
 template <typename T> class blocking_queue
@@ -36,7 +36,7 @@ public:
 			item = queue.front();
 			queue.pop();
 		}
-		
+
 		mtx.unlock();
 		return item;
 	}
@@ -83,47 +83,188 @@ private:
 	bool completed;
 };
 
-const char delimiter[] = {'\r', '\n','\r','\n' };
-const int size = 1024;
-
-void handle_requests(int client_socket, blocking_queue<work_item*>* processing_queue)
+class boyer_moore
 {
-	int  count;
-	char buffer[size];
-	std::list<char> byteBag;
-	do
-	{
-		memset(buffer, 0, size);
-		count = recv(client_socket, buffer, size, 0);
-		const char* i = delimiter;
-		int i2 = 10;
-		//l->socket = client_socket;
-		//processing_queue->push(l);
-		//processing_queue->finalise();
-	} while (count > 0);
-}
+private:
+	static const int ALPHABET_SIZE = 256;
+	std::vector<char> pattern;
+	int last[ALPHABET_SIZE];
+	std::vector<int> match;
+	std::vector<int> suffix;
 
-void process_requests(int client_socket, blocking_queue<work_item*>* processing_queue)
-{
-	work_item* l;
-	do
+public:
+	boyer_moore(std::vector<char> pattern2) : match(pattern2.size()), suffix(pattern2.size())
 	{
-		l = processing_queue->pop();
-		if (l != NULL)
+		pattern = pattern2;
+		ComputeLast();
+		ComputeMatch();
+	}
+
+	int index_of(std::vector<char> text)
+	{
+		int i = pattern.size() - 1;
+		int j = pattern.size() - 1;
+		while (i < text.size())
 		{
-			int s = l->socket;
-			printf("%s", l->buffer);
-			//int count = send(client_socket, "200", 18, 0);
-			delete l;
+			if (pattern[j] == text[i])
+			{
+				if (j == 0)
+				{
+					return i;
+				}
+				j--;
+				i--;
+			}
+			else
+			{
+				i += pattern.size() - j - 1 + max((j - last[text[i]]), match[j]);
+				j = pattern.size() - 1;
+			}
+		}
+		return -1;
+	}
+
+private:
+	void ComputeLast()
+	{
+		for (int k = 0; k < ALPHABET_SIZE; k++)
+		{
+			last[k] = -1;
 		}
 
-	} while (l != NULL);
+		for (int j = pattern.size() - 1; j >= 0; j--)
+		{
+			if (last[pattern[j]] < 0)
+			{
+				last[pattern[j]] = j;
+			}
+		}
+	}
 
-	closesocket(client_socket);
-	printf("socket closed");
-}
+	void ComputeMatch()
+	{
+		for (int j = 0; j < match.size(); j++)
+		{
+			match[j] = match.size();
+		}
 
-void accept_requests(int server_socket)
+		ComputeSuffix();
+		for (int i = 0; i < match.size() - 1; i++)
+		{
+			int j = suffix[i + 1] - 1;
+			if (suffix[i] > j)
+			{
+				match[j] = j - i;
+			}
+			else
+			{
+				//match[j] = Math.Min(j - i + match[i], match[j]);
+			}
+		}
+
+		if (suffix[0] < pattern.size())
+		{
+			for (int j = suffix[0] - 1; j >= 0; j--)
+			{
+				if (suffix[0] < match[j]) { match[j] = suffix[0]; }
+			}
+			{
+				int j = suffix[0];
+				for (int k = suffix[j]; k < pattern.size(); k = suffix[k])
+				{
+					while (j < k)
+					{
+						if (match[j] > k)
+						{
+							match[j] = k;
+						}
+						j++;
+					}
+				}
+			}
+		}
+	}
+
+	void ComputeSuffix()
+	{
+		suffix[suffix.size() - 1] = suffix.size();
+		int j = suffix.size() - 1;
+		for (int i = suffix.size() - 2; i >= 0; i--)
+		{
+			while (j < suffix.size() - 1 && pattern[j] != pattern[i])
+			{
+				j = suffix[j + 1] - 1;
+			}
+			if (pattern[j] == pattern[i])
+			{
+				j--;
+			}
+			suffix[i] = j + 1;
+		}
+	}
+};
+
+class socket_server
+{
+public:
+	const std::vector<char> delimiter = { '\r', '\n','\r','\n' };
+	static const int size = 1024;
+	boyer_moore* boyer_moore2;
+
+	void handle_requests(int client_socket, blocking_queue<work_item*>* processing_queue)
+	{
+		int  count;
+		char buffer[size];
+		std::vector<char> byteBag;
+		do
+		{
+			memset(buffer, 0, size);
+			count = recv(client_socket, buffer, size, 0);
+			if (count > 0)
+			{
+				std::vector<char>* vector = new std::vector<char>(buffer, buffer + count);
+				int i = boyer_moore2->index_of(*vector);
+				if (i != -1)
+				{
+					vector->resize(i);
+					//vector->resize(i+1);
+					//vector->push_back(NULL);
+					work_item* l = new work_item();
+					l->socket = client_socket;
+					l->buffer = &(vector->data()[0]);
+					processing_queue->push(l);
+					processing_queue->finalise();
+				}
+			}
+		} while (count > 0);
+	}
+
+	void process_requests(int client_socket, blocking_queue<work_item*>* processing_queue)
+	{
+		work_item* l;
+		do
+		{
+			l = processing_queue->pop();
+			if (l != NULL)
+			{
+				int s = l->socket;
+				printf("%s\r\n", l->buffer);
+				//int count = send(client_socket, "200", 18, 0);
+				delete l;
+			}
+
+		} while (l != NULL);
+
+		closesocket(client_socket);
+		printf("socket closed\r\n");
+	}
+
+	void accept_requests(int server_socket);
+
+	void start(int port);
+};
+
+void socket_server::accept_requests(int server_socket)
 {
 	struct sockaddr_in client_socket_address;
 	int length = sizeof(client_socket_address);
@@ -131,16 +272,16 @@ void accept_requests(int server_socket)
 	{
 		int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, &length);
 		blocking_queue<work_item*>* processing_queue = new blocking_queue<work_item*>();
-		std::thread handler_thread(handle_requests, client_socket, processing_queue);
+		std::thread handler_thread(&socket_server::handle_requests, this, client_socket, processing_queue);
 		handler_thread.detach();
-		std::thread process_thread(process_requests, client_socket, processing_queue);
+		std::thread process_thread(&socket_server::process_requests, this, client_socket, processing_queue);
 		process_thread.detach();
 	}
 }
 
-
-void start(int port)
+void socket_server::start(int port)
 {
+	boyer_moore2 = new boyer_moore(delimiter);
 	WSADATA wsaData;
 	int listener;
 	struct sockaddr_in serv_addr;
@@ -158,7 +299,7 @@ void start(int port)
 
 	for (int i = 0; i < 1000; i++)
 	{
-		std::thread listener_thread(accept_requests, listener);
+		std::thread listener_thread(&socket_server::accept_requests, this, listener);
 		listener_thread.detach();
 	}
 
@@ -168,7 +309,8 @@ void start(int port)
 
 int main()
 {
-	start(8221);
+	socket_server server;
+	server.start(8221);
 	return 0;
 }
 
