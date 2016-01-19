@@ -8,8 +8,12 @@
 #include <condition_variable>
 #include <sstream>
 
+#ifdef _WIN32
 #include <winsock2.h>
 #pragma comment(lib, "Ws2_32.lib")
+#else
+#include <stdio.h>
+#endif
 
 class work_item
 {
