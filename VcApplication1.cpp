@@ -431,10 +431,12 @@ public:
 		{
 			std::thread listener_thread(&socket_server::accept_requests, this, listener);
 			listener_thread.detach();
-		}
+		}	
 #ifdef _WIN32
 		Sleep(1000000 * 1000);
 		WSACleanup();
+#elif __linux__
+		sleep(1000000 * 1000);
 #endif
 	}
 
