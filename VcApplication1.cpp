@@ -6,6 +6,7 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <sstream>
 
 #include <winsock2.h>
 #pragma comment(lib, "Ws2_32.lib")
@@ -13,8 +14,14 @@
 class work_item
 {
 public:
-	int socket;
-	char* buffer;
+	std::vector<char>* header;
+	std::string target;
+	std::string method;
+
+	~work_item(void)
+	{
+		//delete header;
+	}
 };
 
 template <typename T> class blocking_queue
@@ -100,7 +107,7 @@ public:
 		ComputeMatch();
 	}
 
-	int index_of(std::vector<char> text)
+	/*int index_of(std::vector<char> text)
 	{
 		int i = pattern.size() - 1;
 		int j = pattern.size() - 1;
@@ -121,6 +128,32 @@ public:
 				j = pattern.size() - 1;
 			}
 		}
+		return -1;
+	}*/
+
+	int index_of(std::vector<char> prefix, int index1, char* text, int length)
+	{
+		int i = pattern.size() - 1;
+		int j = pattern.size() - 1;
+		while (i < prefix.size() - index1 + length)
+		{
+			char _byte = i < prefix.size() - index1 ? prefix[i + index1] : text[i - (prefix.size() - index1)];
+			if (pattern[j] == _byte)
+			{
+				if (j == 0)
+				{
+					return i + index1;
+				}
+				j--;
+				i--;
+			}
+			else
+			{
+				i += pattern.size() - j - 1 + max(j - last[_byte], match[j]);
+				j = pattern.size() - 1;
+			}
+		}
+
 		return -1;
 	}
 
@@ -208,7 +241,7 @@ class socket_server
 {
 public:
 	const std::vector<char> delimiter = { '\r', '\n','\r','\n' };
-	static const int size = 1024;
+	static const int size = 102;
 	boyer_moore* boyer_moore2;
 
 	void handle_requests(int client_socket, blocking_queue<work_item*>* processing_queue)
@@ -218,94 +251,236 @@ public:
 		std::vector<char> byteBag;
 		do
 		{
-			memset(buffer, 0, size);
+			//memset(buffer, 0, size);
 			count = recv(client_socket, buffer, size, 0);
 			if (count > 0)
 			{
-				std::vector<char>* vector = new std::vector<char>(buffer, buffer + count);
-				int i = boyer_moore2->index_of(*vector);
-				if (i != -1)
+				int offset = byteBag.size() < delimiter.size() ? byteBag.size() : byteBag.size() - delimiter.size() + 1;
+				int index = boyer_moore2->index_of(byteBag, offset, buffer, count);
+				if (index == -1)
 				{
-					vector->resize(i);
-					//vector->resize(i+1);
-					//vector->push_back(NULL);
-					work_item* l = new work_item();
-					l->socket = client_socket;
-					l->buffer = &(vector->data()[0]);
+					for (int i = 0; i < count; i++)
+					{
+						byteBag.push_back(buffer[i]);
+					}
+				}
+				else
+				{
+					std::vector<char> bytes;
+					if (index > byteBag.size())
+					{
+						for (int i = 0; i < byteBag.size(); i++)
+						{
+							bytes.push_back(byteBag[i]);
+						}
+
+						for (int i = byteBag.size(); i < index - byteBag.size(); i++)
+						{
+							bytes.push_back(buffer[i]);
+						}
+					}
+					else
+					{
+						for (int i = 0; i < index; i++)
+						{
+							bytes.push_back(byteBag[i]);
+						}
+					}
+
+					byteBag.clear();
+					auto l = new work_item();
+					auto header_string = std::string((bytes).begin(), (bytes).end());
+					std::vector<std::string>* segments = split(header_string);
+					if ((*segments).size()>0)
+					{	
+						auto command_line = (*segments)[0];
+						auto command_segments = split(command_line,' ');
+						if ((*command_segments).size() == 3)
+						{
+							(*l).method = (*command_segments)[0];
+							(*l).target = (*command_segments)[1];
+						}
+
+						for (auto& segment : *segments)
+						{
+						}
+
+						delete command_segments;
+						delete segments;
+					}
+
+					l->header = &bytes;
 					processing_queue->push(l);
-					processing_queue->finalise();
 				}
 			}
 		} while (count > 0);
+		processing_queue->finalise();
 	}
 
 	void process_requests(int client_socket, blocking_queue<work_item*>* processing_queue)
 	{
-		work_item* l;
+		work_item* work_item;
 		do
 		{
-			l = processing_queue->pop();
-			if (l != NULL)
+			work_item = processing_queue->pop();
+			if (work_item != NULL)
 			{
-				int s = l->socket;
-				printf("%s\r\n", l->buffer);
+				print(work_item->header);
+				if ((*work_item).target == "/")
+				{
+					std::string html;
+					html.append("<!DOCTYPE html><html><body>hello <img src='/s1.jpg'/>");
+					html.append("hello <form method='POST' enctype='multipart/form-data'><input type='text' value='jjj++++++' name='firstname'/><button type='submit'>submit</button>");
+					html.append("<input type='file' name='fileToUpload' id='fileToUpload'>");
+					html.append("</form>hello <a href='/sys.php'>sys.php</a></body></html>");
+					std::string header = get_response_header(html.length());
+					send(client_socket, &header[0], header.length(), 0);
+					send(client_socket, &html[0], html.length(), 0);					
+					//int count = send(client_socket, "200", 18, 0);
+				}
+
 				//int count = send(client_socket, "200", 18, 0);
-				delete l;
+				delete work_item;
+				shutdown(client_socket, 0);
 			}
 
-		} while (l != NULL);
+		} while (work_item != NULL);
 
+		delete processing_queue;
 		closesocket(client_socket);
 		printf("socket closed\r\n");
 	}
 
-	void accept_requests(int server_socket);
+	std::string get_response_header(int content_length)
+	{
+		std::string response_header;
+		response_header.append("HTTP/1.1 200 OK\r\n");
+		if (content_length != 0)
+		{
+			response_header.append("Content-Length:");
+			response_header.append(std::to_string(content_length));
+			response_header.append("\r\n");
+		}
 
-	void start(int port);
+		//responseHeader.AppendLine(string.Format("Connection:{0}", "Close"));          
+
+		std::string content_type = "Content-Type: text/html;charset=utf-8\r\n";
+		response_header.append(content_type);
+		response_header.append("\r\n");
+		return response_header;
+	}
+
+	void accept_requests(int server_socket)
+	{
+		struct sockaddr_in client_socket_address;
+		int length = sizeof(client_socket_address);
+		while (true)
+		{
+			int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, &length);
+			auto processing_queue = new blocking_queue<work_item*>();
+			std::thread handler_thread(&socket_server::handle_requests, this, client_socket, processing_queue);
+			handler_thread.detach();
+			std::thread process_thread(&socket_server::process_requests, this, client_socket, processing_queue);
+			process_thread.detach();
+		}
+	}
+
+	void start(int port)
+	{
+		boyer_moore2 = new boyer_moore(delimiter);
+		struct sockaddr_in server_address;
+
+		WSADATA wsaData;
+		WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+		int listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		memset((char *)&server_address, 0, sizeof(server_address));
+		server_address.sin_family = AF_INET;
+		server_address.sin_addr.s_addr = INADDR_ANY;
+		server_address.sin_port = htons(port);
+
+		bind(listener, (struct sockaddr *) &server_address, sizeof(server_address));
+		listen(listener, 5);
+
+		for (int i = 0; i < 1000; i++)
+		{
+			std::thread listener_thread(&socket_server::accept_requests, this, listener);
+			listener_thread.detach();
+		}
+
+		Sleep(1000000 * 1000);
+		WSACleanup();
+	}
+
+	~socket_server(void)
+	{
+		delete boyer_moore2;
+	}
+
+private:
+	void print(std::vector<char>* vector)
+	{
+		std::string str(vector->begin(), vector->end());
+		/*for (auto& i : *vector)
+		{
+			std::cout << i;
+		}*/
+
+		std::cout << L"宗";
+		std::cout << str;
+		std::cout << std::endl;
+	}
+
+	std::vector<std::string>* split(std::string text)
+	{
+		auto result = new std::vector<std::string>();
+		int index = 0;
+		for (int i = 0; i < text.length(); i++)
+		{
+			if (text[i] == '\r' && i + i < text.length() && text[i + 1] == '\n')
+			{
+				if (i > index)
+				{
+					(*result).push_back(text.substr(index, i - index));
+				}
+
+				index = i + 2;
+			}
+		}
+
+		if (text.length() > index)
+		{
+			(*result).push_back(text.substr(index, text.length() - index));
+		}
+
+		return result;
+	}
+
+	std::vector<std::string>* split(std::string text, char splitter)
+	{
+		auto result = new std::vector<std::string>();
+		int index = 0;
+		for (int i = 0; i < text.length(); i++)
+		{
+			if (text[i] == splitter)
+			{
+				if (i > index)
+				{
+					(*result).push_back(text.substr(index, i - index));
+				}
+
+				index = i + 1;
+			}
+		}
+
+		if (text.length() > index)
+		{
+			(*result).push_back(text.substr(index, text.length() - index));
+		}
+
+		return result;
+	}
 };
-
-void socket_server::accept_requests(int server_socket)
-{
-	struct sockaddr_in client_socket_address;
-	int length = sizeof(client_socket_address);
-	while (true)
-	{
-		int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, &length);
-		blocking_queue<work_item*>* processing_queue = new blocking_queue<work_item*>();
-		std::thread handler_thread(&socket_server::handle_requests, this, client_socket, processing_queue);
-		handler_thread.detach();
-		std::thread process_thread(&socket_server::process_requests, this, client_socket, processing_queue);
-		process_thread.detach();
-	}
-}
-
-void socket_server::start(int port)
-{
-	boyer_moore2 = new boyer_moore(delimiter);
-	WSADATA wsaData;
-	int listener;
-	struct sockaddr_in serv_addr;
-	port = 8221;
-
-	WSAStartup(MAKEWORD(2, 2), &wsaData);
-	listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	memset((char *)&serv_addr, 0, sizeof(serv_addr));
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = INADDR_ANY;
-	serv_addr.sin_port = htons(port);
-
-	bind(listener, (struct sockaddr *) &serv_addr, sizeof(serv_addr));
-	listen(listener, 5);
-
-	for (int i = 0; i < 1000; i++)
-	{
-		std::thread listener_thread(&socket_server::accept_requests, this, listener);
-		listener_thread.detach();
-	}
-
-	Sleep(1000000 * 1000);
-	WSACleanup();
-}
 
 int main()
 {
