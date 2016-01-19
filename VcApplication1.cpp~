@@ -203,7 +203,7 @@ private:
 			}
 			else
 			{
-				match[j] = std::min(j - i + match[i], match[j]);
+				//match[j] = Math.Min(j - i + match[i], match[j]);
 			}
 		}
 
