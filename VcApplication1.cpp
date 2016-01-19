@@ -8,7 +8,10 @@
 #include <condition_variable>
 #include <sstream>
 
-#ifdef __linux__
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "Ws2_32.lib")
+#else
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -16,11 +19,6 @@
 #include <netdb.h>
 #include <string.h>
 #include <unistd.h>
-#elif _WIN32
-#include <winsock2.h>
-#pragma comment(lib, "Ws2_32.lib")
-#else
-
 #endif
 
 class work_item
@@ -363,10 +361,11 @@ public:
 		} while (work_item != NULL);
 
 		delete processing_queue;
-#ifdef __linux__
-		close(client_socket);
-#elif _WIN32
+
+#ifdef _WIN32
 		closesocket(client_socket);
+#else
+        close(client_socket);
 #endif
 		printf("socket closed\r\n");
 	}
@@ -396,10 +395,10 @@ public:
 		int length = sizeof(client_socket_address);
 		while (true)
 		{
-#ifdef __linux__
-			int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, (socklen_t*)&length);
-#elif _WIN32
+#ifdef _WIN32
 			int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, &length);
+#else
+            int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, (socklen_t*)&length);
 #endif
 			auto processing_queue = new blocking_queue<work_item*>();
 			std::thread handler_thread(&socket_server::handle_requests, this, client_socket, processing_queue);
@@ -435,7 +434,7 @@ public:
 #ifdef _WIN32
 		Sleep(1000000 * 1000);
 		WSACleanup();
-#elif __linux__
+#else
 		sleep(1000000 * 1000);
 #endif
 	}
