@@ -1,4 +1,5 @@
-﻿#include <iostream>
+﻿#define NOMINMAX
+#include <iostream>
 #include <fstream>
 #include <string>
 #include <thread>
