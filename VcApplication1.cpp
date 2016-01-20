@@ -351,10 +351,8 @@ public:
 					std::string header = get_response_header(html.length());
 					send(client_socket, &header[0], header.length(), 0);
 					send(client_socket, &html[0], html.length(), 0);					
-					//int count = send(client_socket, "200", 18, 0);
 				}
 
-				//int count = send(client_socket, "200", 18, 0);
 				delete work_item;
 				shutdown(client_socket, 0);
 			}
