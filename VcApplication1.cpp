@@ -25,7 +25,9 @@
 class work_item
 {
 public:
-	std::vector<char>* header;
+	std::string header;
+	std::string body;
+	int content_length;
 	std::string target;
 	std::string method;
 
@@ -248,7 +250,7 @@ private:
 	}
 };
 
-class socket_server
+class callipepla_server
 {
 public:
 	const std::vector<char> delimiter = { '\r', '\n','\r','\n' };
@@ -259,37 +261,36 @@ public:
 	{
 		int  count;
 		char buffer[size];
-		std::vector<char> byteBag;
+		std::vector<char> byte_bag;
 		do
 		{
-			//memset(buffer, 0, size);
 #ifdef _WIN32	
-		count = recv(client_socket, buffer, size, 0);
+			count = recv(client_socket, buffer, size, 0);
 #else
-		count = read(client_socket, buffer, size);
+			count = read(client_socket, buffer, size);
 #endif
 			if (count > 0)
 			{
-				int offset = byteBag.size() < delimiter.size() ? byteBag.size() : byteBag.size() - delimiter.size() + 1;
-				int index = boyer_moore2->index_of(byteBag, offset, buffer, count);
+				int offset = byte_bag.size() < delimiter.size() ? byte_bag.size() : byte_bag.size() - delimiter.size() + 1;
+				int index = boyer_moore2->index_of(byte_bag, offset, buffer, count);
 				if (index == -1)
 				{
 					for (int i = 0; i < count; i++)
 					{
-						byteBag.push_back(buffer[i]);
+						byte_bag.push_back(buffer[i]);
 					}
 				}
 				else
 				{
 					std::vector<char> bytes;
-					if (index > byteBag.size())
+					if (index > byte_bag.size())
 					{
-						for (int i = 0; i < byteBag.size(); i++)
+						for (int i = 0; i < byte_bag.size(); i++)
 						{
-							bytes.push_back(byteBag[i]);
+							bytes.push_back(byte_bag[i]);
 						}
 
-						for (int i = byteBag.size(); i < index - byteBag.size(); i++)
+						for (int i = byte_bag.size(); i < index - byte_bag.size(); i++)
 						{
 							bytes.push_back(buffer[i]);
 						}
@@ -298,33 +299,39 @@ public:
 					{
 						for (int i = 0; i < index; i++)
 						{
-							bytes.push_back(byteBag[i]);
+							bytes.push_back(byte_bag[i]);
 						}
 					}
 
-					byteBag.clear();
 					auto l = new work_item();
 					auto header_string = std::string((bytes).begin(), (bytes).end());
 					std::vector<std::string>* segments = split(header_string);
+					int content_length = 0;
 					if ((*segments).size()>0)
-					{	
-						auto command_line = (*segments)[0];
-						auto command_segments = split(command_line,' ');
-						if ((*command_segments).size() == 3)
-						{
-							(*l).method = (*command_segments)[0];
-							(*l).target = (*command_segments)[1];
-						}
-
+					{
 						for (auto& segment : *segments)
 						{
+							std::string prefix = "Content-Length: ";
+							int position = segment.find(prefix);
+							if (position != std::string::npos)
+							{
+								content_length = atoi(&segment.substr(position + prefix.size())[0]);
+								break;
+							}
 						}
 
-						delete command_segments;
 						delete segments;
 					}
 
-					l->header = &bytes;
+					int headerLength = count - (delimiter.size() + index - byte_bag.size());
+					byte_bag.clear();
+					std::vector<char> body;
+					body.reserve(content_length);
+					parse_body(&body, buffer, count - headerLength, headerLength, client_socket, content_length - headerLength);
+					std::string body_string((&body)->begin(), (&body)->end());
+					l->content_length = content_length;
+					l->header = header_string;
+					l->body = body_string;
 					processing_queue->push(l);
 				}
 			}
@@ -340,7 +347,33 @@ public:
 			work_item = processing_queue->pop();
 			if (work_item != NULL)
 			{
-				print(work_item->header);
+				std::vector<std::string>* segments = split((*work_item).header);
+				int contentLength = 0;
+				if ((*segments).size()>0)
+				{
+					auto command_line = (*segments)[0];
+					auto command_segments = split(command_line, ' ');
+					if ((*command_segments).size() == 3)
+					{
+						(*work_item).method = (*command_segments)[0];
+						(*work_item).target = (*command_segments)[1];
+					}
+
+					for (auto& segment : *segments)
+					{
+						/*std::string prefix = "Content-Length: ";
+						int position = segment.find(prefix);
+						if (position != std::string::npos)
+						{
+							contentLength = atoi(&segment.substr(position + prefix.size())[0]);
+							break;
+						}*/
+					}
+
+					delete segments;
+				}
+
+				std::cout << (work_item->header);
 				if ((*work_item).target == "/")
 				{
 					std::string html;
@@ -350,7 +383,7 @@ public:
 					html.append("</form>hello <a href='/sys.php'>sys.php</a></body></html>");
 					std::string header = get_response_header(html.length());
 					send(client_socket, &header[0], header.length(), 0);
-					send(client_socket, &html[0], html.length(), 0);					
+					send(client_socket, &html[0], html.length(), 0);
 				}
 
 				delete work_item;
@@ -364,9 +397,44 @@ public:
 #ifdef _WIN32
 		closesocket(client_socket);
 #else
-        close(client_socket);
+		close(client_socket);
 #endif
 		printf("socket closed\r\n");
+	}
+
+	void parse_body(std::vector<char>* body, char buffer[], int offset, int headerLength, int socket, int remaining)
+	{
+		int contentLength = headerLength + remaining;
+		if (contentLength > 0)
+		{
+			if (headerLength > 0)
+			{
+				for (int i = offset; i < headerLength; i++)
+				{
+					(*body).push_back(buffer[i]);
+				}
+			}
+
+			if (remaining > 0)
+			{
+				int count = 0;
+				do
+				{
+#ifdef _WIN32	
+					count = recv(socket, buffer, size, 0);
+#else
+					count = read(socket, buffer, size);
+#endif
+					for (int i = 0; i < count; i++)
+					{
+						(*body).push_back(buffer[i]);
+					}
+
+					remaining -= count;
+
+				} while (count > 0 && remaining > 0);
+			}
+		}
 	}
 
 	std::string get_response_header(int content_length)
@@ -397,12 +465,12 @@ public:
 #ifdef _WIN32
 			int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, &length);
 #else
-            int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, (socklen_t*)&length);
+			int client_socket = accept(server_socket, (struct sockaddr *)&client_socket_address, (socklen_t*)&length);
 #endif
 			auto processing_queue = new blocking_queue<work_item*>();
-			std::thread handler_thread(&socket_server::handle_requests, this, client_socket, processing_queue);
+			std::thread handler_thread(&callipepla_server::handle_requests, this, client_socket, processing_queue);
 			handler_thread.detach();
-			std::thread process_thread(&socket_server::process_requests, this, client_socket, processing_queue);
+			std::thread process_thread(&callipepla_server::process_requests, this, client_socket, processing_queue);
 			process_thread.detach();
 		}
 	}
@@ -427,9 +495,9 @@ public:
 
 		for (int i = 0; i < 1000; i++)
 		{
-			std::thread listener_thread(&socket_server::accept_requests, this, listener);
+			std::thread listener_thread(&callipepla_server::accept_requests, this, listener);
 			listener_thread.detach();
-		}	
+		}
 #ifdef _WIN32
 		Sleep(1000000 * 1000);
 		WSACleanup();
@@ -438,12 +506,23 @@ public:
 #endif
 	}
 
-	~socket_server(void)
+	~callipepla_server(void)
 	{
 		delete boyer_moore2;
 	}
 
 private:
+
+	bool start_with(std::string source, std::string segment)
+	{
+		return source.substr(0, segment.size()) == segment;
+	}
+
+	bool end_with(std::string source, std::string segment)
+	{
+		return source.substr(source.size()- segment.size()) == segment;
+	}
+
 	void print(std::vector<char>* vector)
 	{
 		std::string str(vector->begin(), vector->end());
@@ -452,7 +531,6 @@ private:
 			std::cout << i;
 		}*/
 
-		std::cout << L"宗";
 		std::cout << str;
 		std::cout << std::endl;
 	}
@@ -510,7 +588,7 @@ private:
 
 int main()
 {
-	socket_server server;
+	callipepla_server server;
 	server.start(8221);
 	return 0;
 }
