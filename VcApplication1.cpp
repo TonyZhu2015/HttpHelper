@@ -377,13 +377,77 @@ public:
 				if ((*work_item).target == "/")
 				{
 					std::string html;
-					html.append("<!DOCTYPE html><html><body>hello <img src='/s1.jpg'/>");
+					//<img src='/s1.jpg'/>
+					html.append("<!DOCTYPE html><html><body>hello ");
 					html.append("hello <form method='POST' enctype='multipart/form-data'><input type='text' value='jjj++++++' name='firstname'/><button type='submit'>submit</button>");
 					html.append("<input type='file' name='fileToUpload' id='fileToUpload'>");
-					html.append("</form>hello <a href='/sys.php'>sys.php</a></body></html>");
+					html.append("</form>hello <a href='/sys.php'>sys.php</a><img src='/2.jpg'/></body></html>");
 					std::string header = get_response_header(html.length());
 					send(client_socket, &header[0], header.length(), 0);
 					send(client_socket, &html[0], html.length(), 0);
+				}
+				if ((*work_item).target == "/2.jpg")
+				{
+					BITMAP bmpScreen;
+					HDC hScreenDC = CreateDC(L"DISPLAY", NULL, NULL, NULL);
+					HDC hdcMemDC = CreateCompatibleDC(hScreenDC);
+					int x = GetDeviceCaps(hScreenDC, HORZRES);
+					int y = GetDeviceCaps(hScreenDC, VERTRES);
+					HBITMAP hbmScreen = CreateCompatibleBitmap(hScreenDC, x, y);
+					HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMemDC, hbmScreen);
+					BitBlt(hdcMemDC, 0, 0, x, y, hScreenDC, 0, 0, SRCCOPY);
+					hbmScreen = (HBITMAP)SelectObject(hdcMemDC, hOldBitmap);
+					// Get the BITMAP from the HBITMAP
+					GetObject(hbmScreen, sizeof(BITMAP), &bmpScreen);
+
+					BITMAPFILEHEADER   bmfHeader;
+					BITMAPINFOHEADER   bi;
+
+					bi.biSize = sizeof(BITMAPINFOHEADER);
+					bi.biWidth = bmpScreen.bmWidth;
+					bi.biHeight = bmpScreen.bmHeight;
+					bi.biPlanes = 1;
+					bi.biBitCount = 32;
+					bi.biCompression = BI_RGB;
+					bi.biSizeImage = 0;
+					bi.biXPelsPerMeter = 0;
+					bi.biYPelsPerMeter = 0;
+					bi.biClrUsed = 0;
+					bi.biClrImportant = 0;
+
+					DWORD dwBmpSize = ((bmpScreen.bmWidth * bi.biBitCount + 31) / 32) * 4 * bmpScreen.bmHeight;
+					HANDLE hDIB = GlobalAlloc(GHND, dwBmpSize);
+					char *lpbitmap = (char *)GlobalLock(hDIB);
+					GetDIBits(hScreenDC, hbmScreen, 0,
+						(UINT)bmpScreen.bmHeight,
+						lpbitmap,
+						(BITMAPINFO *)&bi, DIB_RGB_COLORS);
+					// Add the size of the headers to the size of the bitmap to get the total file size
+					DWORD dwSizeofDIB = dwBmpSize + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+					//Offset to where the actual bitmap bits start.
+					bmfHeader.bfOffBits = (DWORD)sizeof(BITMAPFILEHEADER) + (DWORD)sizeof(BITMAPINFOHEADER);
+					//Size of the file
+					bmfHeader.bfSize = dwSizeofDIB;
+					//bfType must always be BM for Bitmaps
+					bmfHeader.bfType = 0x4D42; //BM
+					std::string header = get_response_image(dwSizeofDIB);
+					send(client_socket, &header[0], header.length(), 0);
+					send(client_socket, (LPSTR)&bmfHeader, sizeof(BITMAPFILEHEADER), 0);
+					send(client_socket, (LPSTR)&bi, sizeof(BITMAPINFOHEADER), 0);
+					send(client_socket, (LPSTR)lpbitmap, dwBmpSize, 0);
+
+				/*	WriteFile(hFile, (LPSTR)&bmfHeader, sizeof(BITMAPFILEHEADER), &dwBytesWritten, NULL);
+					WriteFile(hFile, (LPSTR)&bi, sizeof(BITMAPINFOHEADER), &dwBytesWritten, NULL);
+					WriteFile(hFile, (LPSTR)lpbitmap, dwBmpSize, &dwBytesWritten, NULL);*/
+					GlobalUnlock(hDIB);
+					GlobalFree(hDIB);
+
+					DeleteObject(hbmScreen);
+					DeleteObject(hdcMemDC);
+					DeleteDC(hdcMemDC);
+					DeleteDC(hScreenDC);
+					/*
+					send(client_socket, &html[0], html.length(), 0);*/
 				}
 
 				delete work_item;
@@ -451,6 +515,25 @@ public:
 		//responseHeader.AppendLine(string.Format("Connection:{0}", "Close"));          
 
 		std::string content_type = "Content-Type: text/html;charset=utf-8\r\n";
+		response_header.append(content_type);
+		response_header.append("\r\n");
+		return response_header;
+	}
+
+	std::string get_response_image(int content_length)
+	{
+		std::string response_header;
+		response_header.append("HTTP/1.1 200 OK\r\n");
+		if (content_length != 0)
+		{
+			response_header.append("Content-Length: ");
+			response_header.append(std::to_string(content_length));
+			response_header.append("\r\n");
+		}
+
+		//responseHeader.AppendLine(string.Format("Connection:{0}", "Close"));          
+
+		std::string content_type = "Content-Type: image/bmp;\r\n";
 		response_header.append(content_type);
 		response_header.append("\r\n");
 		return response_header;
