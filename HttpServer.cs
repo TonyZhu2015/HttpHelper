@@ -556,7 +556,6 @@ namespace HummingBird
             }
         }
 
-
         private void ComputeMatch()
         {
             for (int j = 0; j < match.Length; j++)
@@ -1311,9 +1310,9 @@ namespace HummingBird
             Console.WriteLine(ex.ToString());
         }
 
-        internal static void Info(string p)
+        public static void Info(string @string)
         {
-            Console.WriteLine(p);
+            Console.WriteLine(@string);
         }
     }
 
