@@ -1,1 +1,2 @@
 Pinyin4net.dll
+how to run a dns server
