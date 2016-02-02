@@ -1,2 +1,7 @@
 Pinyin4net.dll
 how to run a dns server
+[DllImport("advapi32.dll")]
+public static extern bool LogonUser(string userName, string domainName, string password, int LogonType, int LogonProvider, ref IntPtr phToken);
+IntPtr tokenHandler = IntPtr.Zero;
+var domain = default(string);
+var authorized = LogonUser("tony@company.com", domain, "password", 2, 0, ref tokenHandler);
