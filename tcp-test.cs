@@ -1132,10 +1132,60 @@ public static class Extensions
         }
     }
 
-
     public static TcpClient Accept(this TcpListener tcpListener)
     {
         tcpListener.Start();
         return tcpListener.AcceptTcpClient();
+    }
+
+    public static void Write(this NetworkStream stream, string message)
+    {
+        var buffer = Encoding.UTF8.GetBytes(message);
+        stream.Write(buffer, 0, buffer.Length);
+    }
+
+    public static void FtpProtocol()
+    {
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            var listener = new TcpListener(Dns.Resolve("127.0.0.1").AddressList[0], 21);
+            listener.Start();
+
+            TcpClient clientSocket = listener.AcceptTcpClient();
+            using (var networkStream = clientSocket.GetStream())
+            {
+                networkStream.Write($"220 WELCOME{Environment.NewLine}");
+                var buffer = new byte[50000];
+                var count = 0;
+                while (true)
+                {
+                    count = networkStream.Read(buffer, 0, buffer.Length);
+                    if (count > 0)
+                    {
+                        var s = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
+                        if (s.StartsWith("USER"))
+                        {
+                            var userName = s.Substring(s.IndexOf(' ') + 1);
+                            networkStream.Write($"331 User {userName} logged in, needs password{Environment.NewLine}");
+                        }
+                        else if (s.StartsWith("PASS"))
+                        {
+                            var password = s.Substring(s.IndexOf(' ') + 1);
+                            if (true)
+                            {
+                                networkStream.Write($"220 Password ok, FTP server ready{Environment.NewLine}");
+                            }
+                            else
+                            {
+                                networkStream.Write($"530 Username or password incorrect{Environment.NewLine}");
+                            }
+                        }
+                        else if (s.StartsWith("SYST"))
+                        {
+                        }
+                    }
+                }
+            }
+        });
     }
 }

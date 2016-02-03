@@ -32,3 +32,5 @@ extern int auth_sys_user (const char*username, const char*password)
     encrypted = crypt(password, correct);
     return strcmp(encrypted, correct) ? 2 : 0;  // bad pw=2, success=0
 }
+
+/usr/share/xsessions
