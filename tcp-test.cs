@@ -1140,52 +1140,360 @@ public static class Extensions
 
     public static void Write(this NetworkStream stream, string message)
     {
-        var buffer = Encoding.UTF8.GetBytes(message);
+        Log(message);
+        var buffer = Encoding.ASCII.GetBytes(message);
         stream.Write(buffer, 0, buffer.Length);
+    }
+
+    public static void Log(string message)
+    {
+        File.AppendAllText(@"C:\Users\Rong\Documents\log.txt", $"{ message}{Environment.NewLine}");
+    }
+
+    public static void Log(Exception ex)
+    {
+        Log(ex.ToString());
     }
 
     public static void FtpProtocol()
     {
+        var listener = new TcpListener(Dns.Resolve("127.0.0.1").AddressList[0], 21);
+        listener.Start();
+
         ThreadPool.QueueUserWorkItem(delegate
         {
-            var listener = new TcpListener(Dns.Resolve("127.0.0.1").AddressList[0], 21);
-            listener.Start();
-
-            TcpClient clientSocket = listener.AcceptTcpClient();
-            using (var networkStream = clientSocket.GetStream())
+            while (true)
             {
-                networkStream.Write($"220 WELCOME{Environment.NewLine}");
+                var clientSocket = listener.AcceptTcpClient();
+                FtpCommandProtocol(clientSocket);
+            }
+        });
+    }
+
+    public static void FtpCommandProtocol(TcpClient clientSocket)
+    {
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                using (var networkStream = clientSocket.GetStream())
+                {
+                    networkStream.Write($"220 WELCOME{Environment.NewLine}");
+                    var buffer = new byte[50000];
+                    File.WriteAllText(@"C:/Users/Rong/Documents/log.txt", string.Empty);
+                    var currentDirectory = new DirectoryInfo(@"C:/Users/Rong/Documents");
+                    var rootDirectory = new DirectoryInfo(@"C:/Users/Rong/Documents");
+                    var count = 0;
+                    var PasvSocket = default(TcpClient);
+                    {
+                        do
+                        {
+                            count = networkStream.Read(buffer, 0, buffer.Length);
+                            if (count > 0)
+                            {
+                                var s = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
+                                File.AppendAllText(@"C:\Users\Rong\Documents\log.txt", $"{ s}{Environment.NewLine}");
+                                if (s.StartsWith("USER"))
+                                {
+                                    var userName = s.Substring(s.IndexOf(' ') + 1);
+                                    networkStream.Write($"331 User {userName} logged in, needs password{Environment.NewLine}");
+                                }
+                                else if (s.StartsWith("PASS"))
+                                {
+                                    var password = s.Substring(s.IndexOf(' ') + 1);
+                                    if (true)
+                                    {
+                                        networkStream.Write($"220 Password ok, FTP server ready{Environment.NewLine}");
+                                    }
+                                    else
+                                    {
+                                        networkStream.Write($"530 Username or password incorrect{Environment.NewLine}");
+                                    }
+                                }
+                                else if (s.StartsWith("SYST"))
+                                {
+                                    networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
+                                }
+                                else if (s.StartsWith("PWD"))
+                                {
+                                    var relativePath = currentDirectory.FullName.Substring(currentDirectory.FullName.IndexOf(rootDirectory.FullName) + rootDirectory.FullName.Length).Replace('\\', '/').Trim("/");
+                                    if (Path.IsPathRooted(relativePath))
+                                    {
+                                        relativePath = string.Empty;
+                                    }
+
+                                    networkStream.Write($"257 \"/{relativePath}\" is current directory.{Environment.NewLine}");
+                                }
+                                else if (s.StartsWith("CWD"))
+                                {
+                                    try
+                                    {
+                                        var relativePath = s.Substring(s.IndexOf(' ') + 1).Trim("/");
+                                        var directory = Path.GetFullPath(Path.Combine(currentDirectory.FullName, relativePath));
+                                        if (!Path.IsPathRooted(relativePath) && Directory.Exists(directory))
+                                        {
+                                            currentDirectory = new DirectoryInfo(directory);
+                                            networkStream.Write($"250 Okay.{Environment.NewLine}");
+                                        }
+                                        else
+                                        {
+                                            networkStream.Write($"550 Not a valid directory.{Environment.NewLine}");
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        networkStream.Write($"550 Not a valid directory.{Environment.NewLine}");
+                                    }
+                                }
+                                else if (s.StartsWith("TYPE"))
+                                {
+                                    var type = s.Substring(s.IndexOf(' ') + 1);
+                                    if (type == "A")
+                                    {
+                                        networkStream.Write($"200 ASCII transfer mode active.{Environment.NewLine}");
+                                    }
+                                    else if (type == "I")
+                                    {
+                                        networkStream.Write($"200 Binary transfer mode active.{Environment.NewLine}");
+                                    }
+                                    else
+                                    {
+                                        networkStream.Write($"550 Error - unknown binary mode {type}{Environment.NewLine}");
+                                    }
+                                }
+                                else if (s.StartsWith("PASV"))
+                                {
+                                    var listener2 = new TcpListener(IPAddress.Parse("127.0.0.1"), 0);
+                                    if (listener2 == null)
+                                    {
+                                        networkStream.Write($"550 Error - Couldn't start listener {Environment.NewLine}");
+                                    }
+                                    else
+                                    {
+                                        listener2.Start();
+                                        var m_nPort = ((IPEndPoint)listener2.LocalEndpoint).Port;
+                                        string sIpAddress = "127.0.0.1";
+                                        sIpAddress = sIpAddress.Replace('.', ',');
+                                        sIpAddress += ',';
+                                        sIpAddress += (int)(m_nPort / 256);
+                                        sIpAddress += ',';
+                                        sIpAddress += (m_nPort % 256).ToString();
+                                        networkStream.Write($"227 Entering Passive Mode ({sIpAddress}){Environment.NewLine}");
+                                        PasvSocket = listener2.AcceptTcpClient();
+                                    }
+                                }
+                                else if (s.StartsWith("LIST"))
+                                {
+                                    /*-h displays hidden files
+                                    -a does not include the '.' and '..' directories in the listing
+                                    -F adds file characterizations to the listing. Directories are terminated with a '/' and executable files are terminated with a '*'.
+                                    -A displays All files.
+                                    -T when used with - l, displays the full month, day, year, hour, minute, and second for the file date/time.
+                                    */
+                                    networkStream.Write($"150 Opening data connection for LIST.{Environment.NewLine}");
+
+                                    var stringBuilder = new System.Text.StringBuilder();
+                                    foreach (var info in currentDirectory.GetFileSystemInfos())
+                                    {
+                                        var sAttributes = info.GetAttributeString();
+                                        stringBuilder.Append(sAttributes);
+                                        stringBuilder.Append(" 1 owner group");
+                                        if (info.IsDirectory())
+                                        {
+                                            stringBuilder.Append("            0 ");
+                                        }
+                                        else
+                                        {
+                                            string sFileSize = ((FileInfo)info).Length.ToString();
+                                            stringBuilder.Append(sFileSize.RightAlignString(13, ' '));
+                                            stringBuilder.Append(" ");
+                                        }
+
+                                        System.DateTime fileDate = info.LastWriteTime;
+
+                                        string sDay = fileDate.Day.ToString();
+
+                                        stringBuilder.Append(fileDate.Month.Month());
+                                        stringBuilder.Append(" ");
+
+                                        if (sDay.Length == 1)
+                                        {
+                                            stringBuilder.Append(" ");
+                                        }
+
+                                        stringBuilder.Append(sDay);
+                                        stringBuilder.Append(" ");
+                                        stringBuilder.Append(string.Format("{0:hh}", fileDate));
+                                        stringBuilder.Append(":");
+                                        stringBuilder.Append(string.Format("{0:mm}", fileDate));
+                                        stringBuilder.Append(" ");
+
+                                        stringBuilder.Append(info.Name);
+                                        stringBuilder.Append(Environment.NewLine);
+                                    }
+
+                                    using (PasvSocket)
+                                    {
+                                        PasvSocket.GetStream().Write(stringBuilder.ToString());
+                                    }
+
+                                    networkStream.Write($"226 LIST successful. {Environment.NewLine}");
+                                }
+                                /*else if (s.StartsWith("FEAT"))
+                                {
+                                    networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
+                                }*/
+                                else
+                                {
+                                    networkStream.Write($"550 Unknown command{Environment.NewLine}");
+                                }
+                            }
+                        } while (count > 0);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+
+            }
+        });
+    }
+
+    static public string Month(this int nMonth)
+    {
+        switch (nMonth)
+        {
+            case 1:
+                return "Jan";
+            case 2:
+                return "Feb";
+            case 3:
+                return "Mar";
+            case 4:
+                return "Apr";
+            case 5:
+                return "May";
+            case 6:
+                return "Jun";
+            case 7:
+                return "Jul";
+            case 8:
+                return "Aug";
+            case 9:
+                return "Sep";
+            case 10:
+                return "Oct";
+            case 11:
+                return "Nov";
+            case 12:
+                return "Dec";
+            default:
+                System.Diagnostics.Debug.Assert(false);
+                return "";
+        }
+    }
+
+    public static string RightAlignString(this string sString, int nWidth, char cDelimiter)
+    {
+        System.Text.StringBuilder stringBuilder = new System.Text.StringBuilder();
+
+        for (int nCharacter = 0; nCharacter < nWidth - sString.Length; nCharacter++)
+        {
+            stringBuilder.Append(cDelimiter);
+        }
+
+        stringBuilder.Append(sString);
+        return stringBuilder.ToString();
+    }
+
+    public static bool IsDirectory(this FileSystemInfo m_theInfo)
+    {
+        return (m_theInfo.Attributes & System.IO.FileAttributes.Directory) != 0;
+    }
+
+    public static string GetAttributeString(this FileSystemInfo m_theInfo)
+    {
+        bool fDirectory = (m_theInfo.Attributes & System.IO.FileAttributes.Directory) != 0;
+        bool fReadOnly = (m_theInfo.Attributes & System.IO.FileAttributes.ReadOnly) != 0;
+
+        System.Text.StringBuilder builder = new System.Text.StringBuilder();
+
+        if (fDirectory)
+        {
+            builder.Append("d");
+        }
+        else
+        {
+            builder.Append("-");
+        }
+
+        builder.Append("r");
+
+        if (fReadOnly)
+        {
+            builder.Append("-");
+        }
+        else
+        {
+            builder.Append("w");
+        }
+
+        if (fDirectory)
+        {
+            builder.Append("x");
+        }
+        else
+        {
+            builder.Append("-");
+        }
+
+        if (fDirectory)
+        {
+            builder.Append("r-xr-x");
+        }
+        else
+        {
+            builder.Append("r--r--");
+        }
+
+        return builder.ToString();
+    }
+
+    public static void FtpDataProtocol(TcpListener listener2)
+    {
+        listener2.Start();
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            var PasvSocket = listener2.AcceptTcpClient();
+            using (var networkStream = PasvSocket.GetStream())
+            {
                 var buffer = new byte[50000];
                 var count = 0;
-                while (true)
+                do
                 {
                     count = networkStream.Read(buffer, 0, buffer.Length);
                     if (count > 0)
                     {
                         var s = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
-                        if (s.StartsWith("USER"))
-                        {
-                            var userName = s.Substring(s.IndexOf(' ') + 1);
-                            networkStream.Write($"331 User {userName} logged in, needs password{Environment.NewLine}");
-                        }
-                        else if (s.StartsWith("PASS"))
-                        {
-                            var password = s.Substring(s.IndexOf(' ') + 1);
-                            if (true)
-                            {
-                                networkStream.Write($"220 Password ok, FTP server ready{Environment.NewLine}");
-                            }
-                            else
-                            {
-                                networkStream.Write($"530 Username or password incorrect{Environment.NewLine}");
-                            }
-                        }
-                        else if (s.StartsWith("SYST"))
-                        {
-                        }
+
                     }
                 }
+                while (count > 0);
             }
+
+            listener2.Stop();
         });
+    }
+
+    public static string GetRelativePath(string filespec, string folder)
+    {
+        Uri pathUri = new Uri(filespec);
+        // Folders must end in a slash
+        if (!folder.EndsWith(Path.DirectorySeparatorChar.ToString()))
+        {
+            folder += Path.DirectorySeparatorChar;
+        }
+        Uri folderUri = new Uri(folder);
+        return Uri.UnescapeDataString(folderUri.MakeRelativeUri(pathUri).ToString().Replace('/', Path.DirectorySeparatorChar));
     }
 }
