@@ -18,6 +18,15 @@ using System.Web;
 using System.Windows;
 using System.Xml.Serialization;
 
+/*
+command line ftp
+OPTS UTF8 ON
+550 Unknown command
+NLST
+550 Unknown command
+XPWD
+550 Unknown command
+*/
 public class FileBridge
 {
     public int Port { get; private set; }
@@ -1146,7 +1155,7 @@ public static class Extensions
     public static void Write(this NetworkStream stream, string message)
     {
         Log(message);
-        stream.Write(Encoding.ASCII.GetBytes(message));
+        stream.Write(Encoding.UTF8.GetBytes(message));
     }
 
     public static void Write(this NetworkStream stream, byte[] buffer)
@@ -1193,7 +1202,8 @@ public static class Extensions
                     networkStream.WriteLine($"220 WELCOME");
                     var userName = string.Empty;
                     var buffer = new byte[50000];
-                    var rootDirectory = new DirectoryInfo(@"C:/Users/tony/Documents");
+                    var rootDirectory = new DirectoryInfo(@"C:/Users/rong/Documents");
+                    File.AppendAllText($@"{AppDomain.CurrentDomain.BaseDirectory}\log.txt",string.Empty);
                     var namePrefix = "/";
                     var count = 0;
                     var passiveListner = default(TcpListener);
@@ -1235,9 +1245,15 @@ public static class Extensions
                                 try
                                 {
                                     var pathName = command.Substring(command.IndexOf(' ') + 1);
-                                    if (Directory.Exists(GetPath(rootDirectory.FullName, pathName)))
+                                    if (!pathName.StartsWith("/"))
                                     {
-                                        namePrefix = pathName;
+                                        pathName = GetPath(namePrefix, pathName);
+                                    }
+
+                                    var directory = GetPath(rootDirectory.FullName, pathName);
+                                    if (Directory.Exists(directory))//&& must be subdirectory of root directory
+                                    {
+                                        namePrefix = pathName.Replace('\\', '/');
                                         networkStream.Write($"250 Okay.{Environment.NewLine}");
                                     }
                                     else
@@ -1358,6 +1374,10 @@ public static class Extensions
                                         networkStream.WriteLine($"425 No TCP connection was established.");
                                     }
                                 }
+                                else
+                                {
+                                    networkStream.WriteLine($"550 Error - RETR");
+                                }
                             }
                             else if (command.StartsWith("STOR"))
                             {
@@ -1436,6 +1456,19 @@ public static class Extensions
                                 var size = File.Exists(path) ? (new FileInfo(path).Length) : 0;
                                 networkStream.WriteLine($"213 {size}");
                             }
+                            else if (command.StartsWith("CDUP"))
+                            {
+                                if (namePrefix.IndexOf('/') != -1)
+                                {
+                                    namePrefix = namePrefix.Substring(0, namePrefix.LastIndexOf('/'));
+                                }
+
+                                networkStream.WriteLine($"250 CWD command successful.");
+                            }
+                            /*else if (command.StartsWith("RNFR"))
+                            {
+
+                            }*/
                             /*else if (command.StartsWith("APPE"))
                             {
                             }*/
@@ -1444,8 +1477,10 @@ public static class Extensions
                             }*/
                             /*else if (command.StartsWith("FEAT"))
                             {
-                                networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
-                            }*/
+                                networkStream.Write($"211- Features:");
+                                networkStream.Write($" UTF8");
+                                networkStream.Write($"211 END");
+                        }*/
                             else
                             {
                                 networkStream.WriteLine($"550 Unknown command");
@@ -1468,7 +1503,7 @@ public static class Extensions
 
     private static string GetPath(string path1, string namePrefix, string fileName)
     {
-        return Path.Combine(GetPath(path1, namePrefix), fileName);
+        return Path.Combine(GetPath(path1, namePrefix), fileName.TrimStart("/"));
     }
 
     static public string Month(this int nMonth)
