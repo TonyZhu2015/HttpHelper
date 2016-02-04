@@ -1140,8 +1140,7 @@ public static class Extensions
 
     public static void WriteLine(this NetworkStream stream, string message)
     {
-        Log(message);
-        stream.Write(Encoding.ASCII.GetBytes($"{message}{Environment.NewLine}"));
+        stream.Write($"{message}{Environment.NewLine}");
     }
 
     public static void Write(this NetworkStream stream, string message)
@@ -1165,227 +1164,222 @@ public static class Extensions
         Log(ex.ToString());
     }
 
-    public static void FtpProtocol()
+    public static async Task FtpProtocol()
     {
-        var listener = new TcpListener(Dns.Resolve("127.0.0.1").AddressList[0], 21);
+        var listener = new TcpListener(21);
         listener.Start();
-
-        ThreadPool.QueueUserWorkItem(delegate
+        while (true)
         {
-            while (true)
-            {
-                var clientSocket = listener.AcceptTcpClient();
-                FtpCommandProtocol(clientSocket);
-            }
-        });
+            var clientSocket = await listener.AcceptTcpClientAsync();
+#pragma warning disable CS4014
+            FtpCommandProtocol(clientSocket);
+#pragma warning restore CS4014 
+        }
     }
 
-    public static void FtpCommandProtocol(TcpClient clientSocket)
+    public static async Task FtpCommandProtocol(TcpClient commandSocket)
     {
-        ThreadPool.QueueUserWorkItem(delegate
+        using (commandSocket)
         {
             try
             {
-                using (var networkStream = clientSocket.GetStream())
+                using (var networkStream = commandSocket.GetStream())
                 {
-                    networkStream.Write($"220 WELCOME{Environment.NewLine}");
+                    /*
+                    530 Not logged in.
+                    530 Login authentication failed.
+                    530 Password rejected.
+                    */
+                    networkStream.WriteLine($"220 WELCOME");
+                    var userName = string.Empty;
                     var buffer = new byte[50000];
                     var rootDirectory = new DirectoryInfo(@"C:/Users/tony/Documents");
-                    var currentDirectory = rootDirectory;
+                    var namePrefix = "/";
                     var count = 0;
-                    var PasvSocket = default(TcpClient);
+                    var passiveListner = default(TcpListener);
+                    var dataSocket = default(TcpClient);
+                    do
                     {
-                        do
+                        count = await networkStream.ReadAsync(buffer, 0, buffer.Length);
+                        if (count > 0)
                         {
-                            count = networkStream.Read(buffer, 0, buffer.Length);
-                            if (count > 0)
+                            var command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
+                            Log($"{command}{Environment.NewLine}");
+                            if (command.StartsWith("USER"))
                             {
-                                var s = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
-                                Log($"{ s}{Environment.NewLine}");
-                                if (s.StartsWith("USER"))
+                                userName = command.Substring(command.IndexOf(' ') + 1);
+                                networkStream.WriteLine($"331 User {userName} logged in, needs password");
+                            }
+                            else if (command.StartsWith("PASS"))
+                            {
+                                var password = command.Substring(command.IndexOf(' ') + 1);
+                                if (true)
                                 {
-                                    var userName = s.Substring(s.IndexOf(' ') + 1);
-                                    networkStream.Write($"331 User {userName} logged in, needs password{Environment.NewLine}");
+                                    networkStream.WriteLine($"220 Password ok, FTP server ready");
                                 }
-                                else if (s.StartsWith("PASS"))
+                                else
                                 {
-                                    var password = s.Substring(s.IndexOf(' ') + 1);
-                                    if (true)
+                                    networkStream.WriteLine($"530 Username or password incorrect");
+                                }
+                            }
+                            else if (command.StartsWith("SYST"))
+                            {
+                                networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
+                            }
+                            else if (command.StartsWith("PWD"))
+                            {
+                                networkStream.Write($"257 \"/{namePrefix.TrimStart("/")}\" is current directory.{Environment.NewLine}");
+                            }
+                            else if (command.StartsWith("CWD"))
+                            {
+                                try
+                                {
+                                    var pathName = command.Substring(command.IndexOf(' ') + 1);
+                                    if (Directory.Exists(GetPath(rootDirectory.FullName, pathName)))
                                     {
-                                        networkStream.Write($"220 Password ok, FTP server ready{Environment.NewLine}");
+                                        namePrefix = pathName;
+                                        networkStream.Write($"250 Okay.{Environment.NewLine}");
                                     }
                                     else
                                     {
-                                        networkStream.Write($"530 Username or password incorrect{Environment.NewLine}");
+                                        networkStream.WriteLine($"550 Not a valid directory.");
                                     }
                                 }
-                                else if (s.StartsWith("SYST"))
+                                catch
                                 {
-                                    networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
+                                    networkStream.Write($"550 Not a valid directory.{Environment.NewLine}");
                                 }
-                                else if (s.StartsWith("PWD"))
+                            }
+                            else if (command.StartsWith("TYPE"))
+                            {
+                                var type = command.Substring(command.IndexOf(' ') + 1);
+                                if (type == "A")
                                 {
-                                    var relativePath = currentDirectory.FullName.Substring(currentDirectory.FullName.IndexOf(rootDirectory.FullName) + rootDirectory.FullName.Length).Replace('\\', '/').Trim("/");
-                                    if (Path.IsPathRooted(relativePath))
-                                    {
-                                        relativePath = string.Empty;
-                                    }
-
-                                    networkStream.Write($"257 \"/{relativePath}\" is current directory.{Environment.NewLine}");
+                                    networkStream.Write($"200 ASCII transfer mode active.{Environment.NewLine}");
                                 }
-                                else if (s.StartsWith("CWD"))
+                                else if (type == "I")
                                 {
-                                    try
-                                    {
-                                        var relativePath = s.Substring(s.IndexOf(' ') + 1).Trim("/");
-                                        var directory = Path.GetFullPath(Path.Combine(currentDirectory.FullName, relativePath));
-                                        if (!Path.IsPathRooted(relativePath) && Directory.Exists(directory))
-                                        {
-                                            currentDirectory = new DirectoryInfo(directory);
-                                            networkStream.Write($"250 Okay.{Environment.NewLine}");
-                                        }
-                                        else
-                                        {
-                                            networkStream.Write($"550 Not a valid directory.{Environment.NewLine}");
-                                        }
-                                    }
-                                    catch
-                                    {
-                                        networkStream.Write($"550 Not a valid directory.{Environment.NewLine}");
-                                    }
+                                    networkStream.Write($"200 Binary transfer mode active.{Environment.NewLine}");
                                 }
-                                else if (s.StartsWith("TYPE"))
+                                else
                                 {
-                                    var type = s.Substring(s.IndexOf(' ') + 1);
-                                    if (type == "A")
+                                    networkStream.Write($"550 Error - unknown binary mode {type}{Environment.NewLine}");
+                                }
+                            }
+                            else if (command.StartsWith("PASV"))
+                            {
+                                passiveListner = new TcpListener(IPAddress.Parse("127.0.0.1"), 0);
+                                passiveListner.Start();
+                                var m_nPort = ((IPEndPoint)passiveListner.LocalEndpoint).Port;
+                                string sIpAddress = "127.0.0.1";
+                                sIpAddress = sIpAddress.Replace('.', ',');
+                                sIpAddress += ',';
+                                sIpAddress += (int)(m_nPort / 256);
+                                sIpAddress += ',';
+                                sIpAddress += (m_nPort % 256).ToString();
+                                networkStream.WriteLine($"227 Entering Passive Mode ({sIpAddress})");
+                                dataSocket = passiveListner.AcceptTcpClient();
+                            }
+                            else if (command.StartsWith("LIST"))
+                            {
+                                /*-h displays hidden files
+                                -a does not include the '.' and '..' directories in the listing
+                                -F adds file characterizations to the listing. Directories are terminated with a '/' and executable files are terminated with a '*'.
+                                -A displays All files.
+                                -T when used with - l, displays the full month, day, year, hour, minute, and second for the file date/time.
+                                */
+                                networkStream.WriteLine($"150 Opening data connection for LIST.");
+                                var stringBuilder = new System.Text.StringBuilder();
+                                foreach (var info in new DirectoryInfo(GetPath(rootDirectory.FullName, namePrefix)).GetFileSystemInfos())
+                                {
+                                    var sAttributes = info.GetAttributeString();
+                                    stringBuilder.Append(sAttributes);
+                                    stringBuilder.Append(" 1 owner group");
+                                    if (info.IsDirectory())
                                     {
-                                        networkStream.Write($"200 ASCII transfer mode active.{Environment.NewLine}");
-                                    }
-                                    else if (type == "I")
-                                    {
-                                        networkStream.Write($"200 Binary transfer mode active.{Environment.NewLine}");
+                                        stringBuilder.Append("            0 ");
                                     }
                                     else
                                     {
-                                        networkStream.Write($"550 Error - unknown binary mode {type}{Environment.NewLine}");
-                                    }
-                                }
-                                else if (s.StartsWith("PASV"))
-                                {
-                                    var listener2 = new TcpListener(IPAddress.Parse("127.0.0.1"), 0);
-                                    listener2.Start();
-                                    var m_nPort = ((IPEndPoint)listener2.LocalEndpoint).Port;
-                                    string sIpAddress = "127.0.0.1";
-                                    sIpAddress = sIpAddress.Replace('.', ',');
-                                    sIpAddress += ',';
-                                    sIpAddress += (int)(m_nPort / 256);
-                                    sIpAddress += ',';
-                                    sIpAddress += (m_nPort % 256).ToString();
-                                    PasvSocket = listener2.AcceptTcpClient();
-                                    networkStream.Write($"227 Entering Passive Mode ({sIpAddress}){Environment.NewLine}");
-                                }
-                                else if (s.StartsWith("LIST"))
-                                {
-                                    /*-h displays hidden files
-                                    -a does not include the '.' and '..' directories in the listing
-                                    -F adds file characterizations to the listing. Directories are terminated with a '/' and executable files are terminated with a '*'.
-                                    -A displays All files.
-                                    -T when used with - l, displays the full month, day, year, hour, minute, and second for the file date/time.
-                                    */
-                                    networkStream.Write($"150 Opening data connection for LIST.{Environment.NewLine}");
-
-                                    var stringBuilder = new System.Text.StringBuilder();
-                                    foreach (var info in currentDirectory.GetFileSystemInfos())
-                                    {
-                                        var sAttributes = info.GetAttributeString();
-                                        stringBuilder.Append(sAttributes);
-                                        stringBuilder.Append(" 1 owner group");
-                                        if (info.IsDirectory())
-                                        {
-                                            stringBuilder.Append("            0 ");
-                                        }
-                                        else
-                                        {
-                                            string sFileSize = ((FileInfo)info).Length.ToString();
-                                            stringBuilder.Append(sFileSize.RightAlignString(13, ' '));
-                                            stringBuilder.Append(" ");
-                                        }
-
-                                        System.DateTime fileDate = info.LastWriteTime;
-
-                                        string sDay = fileDate.Day.ToString();
-
-                                        stringBuilder.Append(fileDate.Month.Month());
+                                        string sFileSize = ((FileInfo)info).Length.ToString();
+                                        stringBuilder.Append(sFileSize.RightAlignString(13, ' '));
                                         stringBuilder.Append(" ");
+                                    }
 
-                                        if (sDay.Length == 1)
-                                        {
-                                            stringBuilder.Append(" ");
-                                        }
-
-                                        stringBuilder.Append(sDay);
+                                    var fileDate = info.LastWriteTime;
+                                    string sDay = fileDate.Day.ToString();
+                                    stringBuilder.Append(fileDate.Month.Month());
+                                    stringBuilder.Append(" ");
+                                    if (sDay.Length == 1)
+                                    {
                                         stringBuilder.Append(" ");
-                                        stringBuilder.Append(string.Format("{0:hh}", fileDate));
-                                        stringBuilder.Append(":");
-                                        stringBuilder.Append(string.Format("{0:mm}", fileDate));
-                                        stringBuilder.Append(" ");
-
-                                        stringBuilder.Append(info.Name);
-                                        stringBuilder.Append(Environment.NewLine);
                                     }
 
-                                    using (PasvSocket)
-                                    {
-                                        PasvSocket.GetStream().Write(stringBuilder.ToString());
-                                    }
+                                    stringBuilder.Append(sDay);
+                                    stringBuilder.Append(" ");
+                                    stringBuilder.Append(string.Format("{0:hh}", fileDate));
+                                    stringBuilder.Append(":");
+                                    stringBuilder.Append(string.Format("{0:mm}", fileDate));
+                                    stringBuilder.Append(" ");
 
-                                    networkStream.Write($"226 LIST successful. {Environment.NewLine}");
+                                    stringBuilder.Append(info.Name);
+                                    stringBuilder.Append(Environment.NewLine);
                                 }
-                                else if (s.StartsWith("RETR"))
-                                {
-                                    /*accepts the RETR request with code 226 if the entire file was successfully written to the server's TCP buffers;
-                                    rejects the RETR request with code 425 if no TCP connection was established;
-                                    rejects the RETR request with code 426 if the TCP connection was established but then broken by the client or by network failure; or
-                                    rejects the RETR request with code 451 or 551 if the server had trouble reading the file from disk.*/
-                                    networkStream.Write($"150 Opening data connection for RETR.{Environment.NewLine}");
-                                    var fileName = s.Substring(s.IndexOf(' ') + 1);
-                                    var filePath = Path.Combine(currentDirectory.FullName, fileName);
-                                    if (File.Exists(filePath))
-                                    {
-                                        if (PasvSocket != null && PasvSocket.Connected)
-                                        {
-                                            using (PasvSocket)
-                                            {
-                                                PasvSocket.GetStream().Write(File.ReadAllBytes(filePath));
-                                            }
 
-                                            networkStream.Write($"226 RETR successful. {Environment.NewLine}");
-                                        }
-                                        else
+                                using (dataSocket)
+                                {
+                                    dataSocket.GetStream().Write(stringBuilder.ToString());
+                                }
+
+                                networkStream.WriteLine($"226 LIST successful.");
+                            }
+                            else if (command.StartsWith("RETR"))
+                            {
+                                /*accepts the RETR request with code 226 if the entire file was successfully written to the server's TCP buffers
+                                rejects the RETR request with code 425 if no TCP connection was established
+                                rejects the RETR request with code 426 if the TCP connection was established but then broken by the client or by network failure; or
+                                rejects the RETR request with code 451 or 551 if the server had trouble reading the file from disk.*/
+                                networkStream.WriteLine($"150 Opening data connection for RETR.");
+                                var fileName = command.Substring(command.IndexOf(' ') + 1);
+                                var filePath = GetPath(rootDirectory.FullName, namePrefix, fileName);
+                                if (File.Exists(filePath))
+                                {
+                                    if (dataSocket != null && dataSocket.Connected)
+                                    {
+                                        using (dataSocket)
                                         {
-                                            networkStream.Write($"425 No TCP connection was established. {Environment.NewLine}");
+                                            dataSocket.GetStream().Write(File.ReadAllBytes(filePath));
                                         }
+
+                                        networkStream.WriteLine($"226 RETR successful.");
+                                    }
+                                    else
+                                    {
+                                        networkStream.WriteLine($"425 No TCP connection was established.");
                                     }
                                 }
-                                else if (s.StartsWith("STOR"))
+                            }
+                            else if (command.StartsWith("STOR"))
+                            {
+                                /*If the server is willing to create a new file under that name, or replace an existing file under that name, it responds with a mark using code 150. It then stops accepting new connections, attempts to read the contents of the file from the data connection, and closes the data connection. Finally it
+                                accepts the STOR request with code 226 if the entire file was successfully received and stored
+                                rejects the STOR request with code 425 if no TCP connection was established
+                                rejects the STOR request with code 426 if the TCP connection was established but then broken by the client or by network failure; or
+                                rejects the STOR request with code 451, 452, or 552 if the server had trouble saving the file to disk.*/
+                                networkStream.WriteLine($"150 Opening data connection for STOR.");
+                                var fileName = command.Substring(command.IndexOf(' ') + 1);
+                                var filePath = GetPath(rootDirectory.FullName, namePrefix, fileName);
+                                if (!File.Exists(filePath))
                                 {
-                                    /*If the server is willing to create a new file under that name, or replace an existing file under that name, it responds with a mark using code 150. It then stops accepting new connections, attempts to read the contents of the file from the data connection, and closes the data connection. Finally it
-                                    accepts the STOR request with code 226 if the entire file was successfully received and stored;
-                                    rejects the STOR request with code 425 if no TCP connection was established;
-                                    rejects the STOR request with code 426 if the TCP connection was established but then broken by the client or by network failure; or
-                                    rejects the STOR request with code 451, 452, or 552 if the server had trouble saving the file to disk.*/
-                                    networkStream.WriteLine($"150 Opening data connection for STOR.");
-                                    var fileName = s.Substring(s.IndexOf(' ') + 1);
-                                    var filePath = Path.Combine(currentDirectory.FullName, fileName);
-                                    if (!File.Exists(filePath))
+                                    using (dataSocket)
                                     {
-                                        if (PasvSocket != null && PasvSocket.Connected)
+                                        if (dataSocket != null && dataSocket.Connected)
                                         {
                                             using (FileStream fileStream = new FileStream(filePath, FileMode.OpenOrCreate))
                                             {
-                                                using (PasvSocket)
+                                                using (dataSocket)
                                                 {
-                                                    var dataStream = PasvSocket.GetStream();
+                                                    var dataStream = dataSocket.GetStream();
                                                     var count2 = 0;
                                                     var buffer2 = new byte[1024];
                                                     do
@@ -1396,60 +1390,85 @@ public static class Extensions
                                                 }
                                             }
 
-                                            networkStream.Write($"226 RETR successful. {Environment.NewLine}");
+                                            networkStream.WriteLine($"226 RETR successful.");
                                         }
                                         else
                                         {
-                                            networkStream.Write($"425 No TCP connection was established. {Environment.NewLine}");
+                                            networkStream.WriteLine($"425 No TCP connection was established.");
                                         }
                                     }
                                 }
-                                else if (s.StartsWith("DELE"))
+                            }
+                            else if (command.StartsWith("DELE"))
+                            {
+                                //A typical server accepts DELE with code 250 if the file was successfully removed, or rejects DELE with code 450 or 550 if the removal failed.
+                                var fileName = command.Substring(command.IndexOf(' ') + 1);
+                                var filePath = GetPath(rootDirectory.FullName, namePrefix, fileName);
+                                if (File.Exists(filePath))
                                 {
-                                    //A typical server accepts DELE with code 250 if the file was successfully removed, or rejects DELE with code 450 or 550 if the removal failed.
-                                    var fileName = s.Substring(s.IndexOf(' ') + 1);
-                                    var filePath = Path.Combine(currentDirectory.FullName, fileName);
-                                    if (File.Exists(filePath))
-                                    {
-                                        File.Delete(filePath);
-                                        networkStream.WriteLine($"250 DELE {fileName} successful.");
-                                    }
-                                }
-                                else if (s.StartsWith("PORT"))
-                                {
-                                    //PORT 127,0,0,1,214,80
-                                    var addressString = s.Substring(s.IndexOf(' ') + 1);
-                                    var y = addressString.Split(',');
-                                    var tcpClient = new TcpClient();
-                                    var port = 256 * int.Parse(y[4]) + int.Parse(y[5]);
-                                    tcpClient.Connect(IPAddress.Parse(string.Join(".", new[] { y[0], y[1], y[2], y[3] })), port);
-                                    PasvSocket = tcpClient;
-                                    networkStream.WriteLine($"200 PORT successful.");
-                                }
-                                /*else if (s.StartsWith("APPE"))
-                                {
-                                }*/
-                                /*else if (s.StartsWith("REST"))
-                                {
-                                }*/
-                                /*else if (s.StartsWith("FEAT"))
-                                {
-                                    networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
-                                }*/
-                                else
-                                {
-                                    networkStream.Write($"550 Unknown command{Environment.NewLine}");
+                                    File.Delete(filePath);
+                                    networkStream.WriteLine($"250 DELE {fileName} successful.");
                                 }
                             }
-                        } while (count > 0);
-                    }
+                            else if (command.StartsWith("PORT"))
+                            {
+                                //PORT 127,0,0,1,214,80
+                                var addressString = command.Substring(command.IndexOf(' ') + 1);
+                                var y = addressString.Split(',');
+                                var tcpClient = new TcpClient();
+                                var port = 256 * int.Parse(y[4]) + int.Parse(y[5]);
+                                tcpClient.Connect(IPAddress.Parse(string.Join(".", new[] { y[0], y[1], y[2], y[3] })), port);
+                                dataSocket = tcpClient;
+                                networkStream.WriteLine($"200 PORT successful.");
+                            }
+                            else if (command.StartsWith("QUIT"))
+                            {
+                                networkStream.WriteLine($"221 Bye.");
+                                commandSocket?.Close();
+                                dataSocket?.Close();
+                                passiveListner?.Stop();
+                                break;
+                            }
+                            else if (command.StartsWith("SIZE"))
+                            {
+                                var pathName = command.Substring(command.IndexOf(' ') + 1).Trim('/');
+                                var path = Path.GetFullPath(Path.Combine(rootDirectory.FullName, namePrefix, pathName));
+                                var size = File.Exists(path) ? (new FileInfo(path).Length) : 0;
+                                networkStream.WriteLine($"213 {size}");
+                            }
+                            /*else if (command.StartsWith("APPE"))
+                            {
+                            }*/
+                            /*else if (command.StartsWith("REST"))
+                            {
+                            }*/
+                            /*else if (command.StartsWith("FEAT"))
+                            {
+                                networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
+                            }*/
+                            else
+                            {
+                                networkStream.WriteLine($"550 Unknown command");
+                            }
+                        }
+                    } while (count > 0);
                 }
             }
             catch (Exception ex)
             {
-
+                Log(ex);
             }
-        });
+        }
+    }
+
+    private static string GetPath(string path1, string namePrefix)
+    {
+        return Path.Combine(path1, namePrefix.TrimStart("/"));
+    }
+
+    private static string GetPath(string path1, string namePrefix, string fileName)
+    {
+        return Path.Combine(GetPath(path1, namePrefix), fileName);
     }
 
     static public string Month(this int nMonth)
