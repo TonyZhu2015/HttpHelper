@@ -1138,16 +1138,26 @@ public static class Extensions
         return tcpListener.AcceptTcpClient();
     }
 
+    public static void WriteLine(this NetworkStream stream, string message)
+    {
+        Log(message);
+        stream.Write(Encoding.ASCII.GetBytes($"{message}{Environment.NewLine}"));
+    }
+
     public static void Write(this NetworkStream stream, string message)
     {
         Log(message);
-        var buffer = Encoding.ASCII.GetBytes(message);
+        stream.Write(Encoding.ASCII.GetBytes(message));
+    }
+
+    public static void Write(this NetworkStream stream, byte[] buffer)
+    {
         stream.Write(buffer, 0, buffer.Length);
     }
 
     public static void Log(string message)
     {
-        File.AppendAllText(@"C:\Users\Rong\Documents\log.txt", $"{ message}{Environment.NewLine}");
+        File.AppendAllText($@"{AppDomain.CurrentDomain.BaseDirectory}\log.txt", $"{ message}{Environment.NewLine}");
     }
 
     public static void Log(Exception ex)
@@ -1180,9 +1190,8 @@ public static class Extensions
                 {
                     networkStream.Write($"220 WELCOME{Environment.NewLine}");
                     var buffer = new byte[50000];
-                    File.WriteAllText(@"C:/Users/Rong/Documents/log.txt", string.Empty);
-                    var currentDirectory = new DirectoryInfo(@"C:/Users/Rong/Documents");
-                    var rootDirectory = new DirectoryInfo(@"C:/Users/Rong/Documents");
+                    var rootDirectory = new DirectoryInfo(@"C:/Users/tony/Documents");
+                    var currentDirectory = rootDirectory;
                     var count = 0;
                     var PasvSocket = default(TcpClient);
                     {
@@ -1192,7 +1201,7 @@ public static class Extensions
                             if (count > 0)
                             {
                                 var s = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
-                                File.AppendAllText(@"C:\Users\Rong\Documents\log.txt", $"{ s}{Environment.NewLine}");
+                                Log($"{ s}{Environment.NewLine}");
                                 if (s.StartsWith("USER"))
                                 {
                                     var userName = s.Substring(s.IndexOf(' ') + 1);
@@ -1264,23 +1273,16 @@ public static class Extensions
                                 else if (s.StartsWith("PASV"))
                                 {
                                     var listener2 = new TcpListener(IPAddress.Parse("127.0.0.1"), 0);
-                                    if (listener2 == null)
-                                    {
-                                        networkStream.Write($"550 Error - Couldn't start listener {Environment.NewLine}");
-                                    }
-                                    else
-                                    {
-                                        listener2.Start();
-                                        var m_nPort = ((IPEndPoint)listener2.LocalEndpoint).Port;
-                                        string sIpAddress = "127.0.0.1";
-                                        sIpAddress = sIpAddress.Replace('.', ',');
-                                        sIpAddress += ',';
-                                        sIpAddress += (int)(m_nPort / 256);
-                                        sIpAddress += ',';
-                                        sIpAddress += (m_nPort % 256).ToString();
-                                        networkStream.Write($"227 Entering Passive Mode ({sIpAddress}){Environment.NewLine}");
-                                        PasvSocket = listener2.AcceptTcpClient();
-                                    }
+                                    listener2.Start();
+                                    var m_nPort = ((IPEndPoint)listener2.LocalEndpoint).Port;
+                                    string sIpAddress = "127.0.0.1";
+                                    sIpAddress = sIpAddress.Replace('.', ',');
+                                    sIpAddress += ',';
+                                    sIpAddress += (int)(m_nPort / 256);
+                                    sIpAddress += ',';
+                                    sIpAddress += (m_nPort % 256).ToString();
+                                    PasvSocket = listener2.AcceptTcpClient();
+                                    networkStream.Write($"227 Entering Passive Mode ({sIpAddress}){Environment.NewLine}");
                                 }
                                 else if (s.StartsWith("LIST"))
                                 {
@@ -1339,6 +1341,97 @@ public static class Extensions
 
                                     networkStream.Write($"226 LIST successful. {Environment.NewLine}");
                                 }
+                                else if (s.StartsWith("RETR"))
+                                {
+                                    /*accepts the RETR request with code 226 if the entire file was successfully written to the server's TCP buffers;
+                                    rejects the RETR request with code 425 if no TCP connection was established;
+                                    rejects the RETR request with code 426 if the TCP connection was established but then broken by the client or by network failure; or
+                                    rejects the RETR request with code 451 or 551 if the server had trouble reading the file from disk.*/
+                                    networkStream.Write($"150 Opening data connection for RETR.{Environment.NewLine}");
+                                    var fileName = s.Substring(s.IndexOf(' ') + 1);
+                                    var filePath = Path.Combine(currentDirectory.FullName, fileName);
+                                    if (File.Exists(filePath))
+                                    {
+                                        if (PasvSocket != null && PasvSocket.Connected)
+                                        {
+                                            using (PasvSocket)
+                                            {
+                                                PasvSocket.GetStream().Write(File.ReadAllBytes(filePath));
+                                            }
+
+                                            networkStream.Write($"226 RETR successful. {Environment.NewLine}");
+                                        }
+                                        else
+                                        {
+                                            networkStream.Write($"425 No TCP connection was established. {Environment.NewLine}");
+                                        }
+                                    }
+                                }
+                                else if (s.StartsWith("STOR"))
+                                {
+                                    /*If the server is willing to create a new file under that name, or replace an existing file under that name, it responds with a mark using code 150. It then stops accepting new connections, attempts to read the contents of the file from the data connection, and closes the data connection. Finally it
+                                    accepts the STOR request with code 226 if the entire file was successfully received and stored;
+                                    rejects the STOR request with code 425 if no TCP connection was established;
+                                    rejects the STOR request with code 426 if the TCP connection was established but then broken by the client or by network failure; or
+                                    rejects the STOR request with code 451, 452, or 552 if the server had trouble saving the file to disk.*/
+                                    networkStream.WriteLine($"150 Opening data connection for STOR.");
+                                    var fileName = s.Substring(s.IndexOf(' ') + 1);
+                                    var filePath = Path.Combine(currentDirectory.FullName, fileName);
+                                    if (!File.Exists(filePath))
+                                    {
+                                        if (PasvSocket != null && PasvSocket.Connected)
+                                        {
+                                            using (FileStream fileStream = new FileStream(filePath, FileMode.OpenOrCreate))
+                                            {
+                                                using (PasvSocket)
+                                                {
+                                                    var dataStream = PasvSocket.GetStream();
+                                                    var count2 = 0;
+                                                    var buffer2 = new byte[1024];
+                                                    do
+                                                    {
+                                                        count2 = dataStream.Read(buffer2, 0, buffer2.Length);
+                                                        fileStream.Write(buffer2, 0, count2);
+                                                    } while (count2 > 0);
+                                                }
+                                            }
+
+                                            networkStream.Write($"226 RETR successful. {Environment.NewLine}");
+                                        }
+                                        else
+                                        {
+                                            networkStream.Write($"425 No TCP connection was established. {Environment.NewLine}");
+                                        }
+                                    }
+                                }
+                                else if (s.StartsWith("DELE"))
+                                {
+                                    //A typical server accepts DELE with code 250 if the file was successfully removed, or rejects DELE with code 450 or 550 if the removal failed.
+                                    var fileName = s.Substring(s.IndexOf(' ') + 1);
+                                    var filePath = Path.Combine(currentDirectory.FullName, fileName);
+                                    if (File.Exists(filePath))
+                                    {
+                                        File.Delete(filePath);
+                                        networkStream.WriteLine($"250 DELE {fileName} successful.");
+                                    }
+                                }
+                                else if (s.StartsWith("PORT"))
+                                {
+                                    //PORT 127,0,0,1,214,80
+                                    var addressString = s.Substring(s.IndexOf(' ') + 1);
+                                    var y = addressString.Split(',');
+                                    var tcpClient = new TcpClient();
+                                    var port = 256 * int.Parse(y[4]) + int.Parse(y[5]);
+                                    tcpClient.Connect(IPAddress.Parse(string.Join(".", new[] { y[0], y[1], y[2], y[3] })), port);
+                                    PasvSocket = tcpClient;
+                                    networkStream.WriteLine($"200 PORT successful.");
+                                }
+                                /*else if (s.StartsWith("APPE"))
+                                {
+                                }*/
+                                /*else if (s.StartsWith("REST"))
+                                {
+                                }*/
                                 /*else if (s.StartsWith("FEAT"))
                                 {
                                     networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
