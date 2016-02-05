@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -1195,13 +1196,22 @@ public static class Extensions
 
         var address = IPAddress.Parse(prefix);
         var listener = new TcpListener(address, port);
-        listener.Start();
-        while (true)
+
+        try
         {
-            var clientSocket = await listener.AcceptTcpClientAsync();
-#pragma warning disable CS4014
-            FtpCommandProtocol(address, clientSocket);
-#pragma warning restore CS4014 
+            listener.Start();
+            while (true)
+            {
+                var clientSocket = await listener.AcceptTcpClientAsync();
+                ThreadPool.QueueUserWorkItem(async delegate
+                {
+                    await FtpCommandProtocol(address, clientSocket);
+                });
+            }
+        }
+        finally
+        {
+            listener.Stop();
         }
     }
 
@@ -1220,7 +1230,7 @@ public static class Extensions
                     */
                     networkStream.WriteLine($"220 WELCOME");
                     var userName = string.Empty;
-                    var buffer = new byte[50000];
+                    var buffer = new byte[500];
                     var authenticated = false;
                     var rootDirectory = new DirectoryInfo(@"C:/Users/rong/Documents");
                     var offset = 0;
@@ -1228,7 +1238,6 @@ public static class Extensions
                     File.AppendAllText($@"{AppDomain.CurrentDomain.BaseDirectory}\log.txt", string.Empty);
                     var namePrefix = "/";
                     var count = 0;
-                    var passiveListner = default(TcpListener);
                     var dataSocket = default(TcpClient);
                     do
                     {
@@ -1253,7 +1262,7 @@ public static class Extensions
                                     if (true)
                                     {
                                         authenticated = true;
-                                        networkStream.WriteLine($"220 Password ok, FTP server ready");
+                                        networkStream.WriteLine($"220 PASSWORD OK, FTP SERVER READY");
                                     }
                                     else
                                     {
@@ -1347,12 +1356,20 @@ public static class Extensions
                                 renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
-                                    passiveListner = new TcpListener(address, 0);
-                                    passiveListner.Start();
-                                    var m_nPort = ((IPEndPoint)passiveListner.LocalEndpoint).Port;
-                                    var sIpAddress = $"{address.ToString().Replace('.', ',')},{(int)(m_nPort / 256)},{(m_nPort % 256)}";
-                                    networkStream.WriteLine($"227 Entering Passive Mode ({sIpAddress})");
-                                    dataSocket = passiveListner.AcceptTcpClient();
+                                    dataSocket?.Close();
+                                    var passiveListener = new TcpListener(address, 0);
+                                    try
+                                    {
+                                        passiveListener.Start();
+                                        var port = ((IPEndPoint)passiveListener.LocalEndpoint).Port;
+                                        var addressString = $"{address.ToString().Replace('.', ',')},{(int)(port / 256)},{(port % 256)}";
+                                        networkStream.WriteLine($"227 Entering Passive Mode ({addressString})");
+                                        dataSocket = passiveListener.Accept(10000);
+                                    }
+                                    finally
+                                    {
+                                        passiveListener.Stop();
+                                    }
                                 }
                             }
                             else if (command.StartsWith("LIST") || command.StartsWith("NLIST"))
@@ -1366,42 +1383,49 @@ public static class Extensions
                                 renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
-                                    networkStream.WriteLine($"150 Opening data connection for LIST.");
-                                    var stringBuilder = new StringBuilder();
-                                    foreach (var info in new DirectoryInfo(GetPath(rootDirectory.FullName, namePrefix)).GetFileSystemInfos())
+                                    if (dataSocket?.Connected ?? false)
                                     {
-                                        var sAttributes = info.GetAttributeString();
-                                        stringBuilder.Append($"{sAttributes} 1 owner group");
-                                        if (info.IsDirectory())
+                                        networkStream.WriteLine($"150 Opening data connection for LIST.");
+                                        var stringBuilder = new StringBuilder();
+                                        foreach (var info in new DirectoryInfo(GetPath(rootDirectory.FullName, namePrefix)).GetFileSystemInfos())
                                         {
-                                            stringBuilder.Append("            0 ");
-                                        }
-                                        else
-                                        {
-                                            var sFileSize = ((FileInfo)info).Length.ToString();
-                                            stringBuilder.Append(sFileSize.RightAlignString(13, ' '));
+                                            var sAttributes = info.GetAttributeString();
+                                            stringBuilder.Append($"{sAttributes} 1 owner group");
+                                            if (info.IsDirectory())
+                                            {
+                                                stringBuilder.Append("            0 ");
+                                            }
+                                            else
+                                            {
+                                                var sFileSize = ((FileInfo)info).Length.ToString();
+                                                stringBuilder.Append(sFileSize.RightAlignString(13, ' '));
+                                                stringBuilder.Append(" ");
+                                            }
+
+                                            var fileDate = info.LastWriteTime;
+                                            var sDay = fileDate.Day.ToString();
+                                            stringBuilder.Append(fileDate.Month.Month());
                                             stringBuilder.Append(" ");
+                                            if (sDay.Length == 1)
+                                            {
+                                                stringBuilder.Append(" ");
+                                            }
+
+                                            stringBuilder.Append($"{sDay} {fileDate:hh}:{fileDate:mm} {info.Name}");
+                                            stringBuilder.Append(Environment.NewLine);
                                         }
 
-                                        var fileDate = info.LastWriteTime;
-                                        var sDay = fileDate.Day.ToString();
-                                        stringBuilder.Append(fileDate.Month.Month());
-                                        stringBuilder.Append(" ");
-                                        if (sDay.Length == 1)
+                                        using (dataSocket)
                                         {
-                                            stringBuilder.Append(" ");
+                                            dataSocket.GetStream().Write(stringBuilder.ToString());
                                         }
 
-                                        stringBuilder.Append($"{sDay} {fileDate:hh}:{fileDate:mm} {info.Name}");
-                                        stringBuilder.Append(Environment.NewLine);
+                                        networkStream.WriteLine($"226 LIST successful.");
                                     }
-
-                                    using (dataSocket)
+                                    else
                                     {
-                                        dataSocket.GetStream().Write(stringBuilder.ToString());
+                                        networkStream.WriteLine($"550 Error-LIST");
                                     }
-
-                                    networkStream.WriteLine($"226 LIST successful.");
                                 }
                             }
                             else if (command.StartsWith("REST"))
@@ -1433,7 +1457,7 @@ public static class Extensions
                                     Log($"Retirve {filePath}");
                                     if (File.Exists(filePath))
                                     {
-                                        if (dataSocket != null && dataSocket.Connected)
+                                        if (dataSocket?.Connected ?? false)
                                         {
                                             using (dataSocket)
                                             {
@@ -1475,14 +1499,13 @@ public static class Extensions
                                     var filePath = GetPath(rootDirectory.FullName, namePrefix, fileName);
                                     using (dataSocket)
                                     {
-                                        if (dataSocket != null && dataSocket.Connected)
+                                        if (dataSocket?.Connected ?? false)
                                         {
                                             using (var fileStream = new FileStream(filePath, FileMode.OpenOrCreate))
                                             {
                                                 fileStream.Seek(offset, SeekOrigin.Begin);
-                                                using (dataSocket)
+                                                using (var dataStream = dataSocket.GetStream())
                                                 {
-                                                    var dataStream = dataSocket.GetStream();
                                                     var count2 = 0;
                                                     var buffer2 = new byte[1024];
                                                     do
@@ -1513,22 +1536,19 @@ public static class Extensions
                                     var filePath = GetPath(rootDirectory.FullName, namePrefix, fileName);
                                     using (dataSocket)
                                     {
-                                        if (dataSocket != null && dataSocket.Connected)
+                                        if (dataSocket?.Connected ?? false)
                                         {
                                             using (var fileStream = new FileStream(filePath, FileMode.OpenOrCreate))
                                             {
                                                 fileStream.Seek(0, SeekOrigin.End);
-                                                using (dataSocket)
+                                                var dataStream = dataSocket.GetStream();
+                                                var count2 = 0;
+                                                var buffer2 = new byte[1024];
+                                                do
                                                 {
-                                                    var dataStream = dataSocket.GetStream();
-                                                    var count2 = 0;
-                                                    var buffer2 = new byte[1024];
-                                                    do
-                                                    {
-                                                        count2 = dataStream.Read(buffer2, 0, buffer2.Length);
-                                                        fileStream.Write(buffer2, 0, count2);
-                                                    } while (count2 > 0);
-                                                }
+                                                    count2 = dataStream.Read(buffer2, 0, buffer2.Length);
+                                                    fileStream.Write(buffer2, 0, count2);
+                                                } while (count2 > 0);
                                             }
 
                                             offset = 0;
@@ -1590,7 +1610,6 @@ public static class Extensions
                                 networkStream.WriteLine($"221 Bye.");
                                 commandSocket?.Close();
                                 dataSocket?.Close();
-                                passiveListner?.Stop();
                                 break;
                             }
                             else if (command.StartsWith("SIZE"))
@@ -1716,6 +1735,7 @@ public static class Extensions
                             }
                             else if (command.StartsWith("RNTO"))
                             {
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     if (!string.IsNullOrEmpty(renamingFile))
@@ -1745,24 +1765,45 @@ public static class Extensions
                             }
                             else if (command.StartsWith("FEAT"))
                             {
-                                networkStream.WriteLine($"211- Features:");
-                                networkStream.WriteLine($" UTF8");
-                                networkStream.WriteLine($"211 END");
+                                renamingFile = string.Empty;
+                                if (Authenticate(networkStream, authenticated))
+                                {
+                                    networkStream.WriteLine($"211- Features:");
+                                    networkStream.WriteLine($" UTF8");
+                                    networkStream.WriteLine($"211 END");
+                                }
                             }
                             /*The ALLO verb ALLO is obsolete. The server should accept any ALLO request with code 202.*/
                             else
                             {
+                                renamingFile = string.Empty;
                                 networkStream.WriteLine($"550 Unknown command");
                             }
-                        }
-                    } while (count > 0);
-                }
+                            }
+                        } while (count > 0) ;
+                    }
             }
             catch (Exception ex)
             {
                 Log(ex);
-            }
+            } 
         }
+    }
+
+    public static TcpClient Accept(this TcpListener listener, int timeout)
+    {
+        var tcpClient = default(TcpClient);
+        var asyncResult = listener.BeginAcceptTcpClient(null, null);
+        if (asyncResult.AsyncWaitHandle.WaitOne(timeout, true))
+        {
+            tcpClient = listener.EndAcceptTcpClient(asyncResult);
+        }
+        else
+        {
+            listener.Stop();
+        }
+
+        return tcpClient;
     }
 
     private static bool Authenticate(NetworkStream networkStream, bool authenticated)
