@@ -1154,7 +1154,7 @@ public static class Extensions
 
     public static void Write(this NetworkStream stream, string message)
     {
-        Log(message);
+        Log(message.TrimEnd(Environment.NewLine));
         stream.Write(Encoding.UTF8.GetBytes(message));
     }
 
@@ -1178,20 +1178,34 @@ public static class Extensions
         Log(ex.ToString());
     }
 
-    public static async Task FtpProtocol()
+    public static async Task FtpProtocol(string prefix)
     {
-        var listener = new TcpListener(21);
+        //SITE chmod 644 /My Web Sites/WebSite1/w-brand.png
+        var port = 21;
+        if (prefix.IndexOf(":") != -1)
+        {
+            var number = 0;
+            if (int.TryParse(prefix.Substring(prefix.IndexOf(":") + 1), out number))
+            {
+                port = number;
+            }
+
+            prefix = prefix.Substring(0, prefix.IndexOf(":"));
+        }
+
+        var address = IPAddress.Parse(prefix);
+        var listener = new TcpListener(address, port);
         listener.Start();
         while (true)
         {
             var clientSocket = await listener.AcceptTcpClientAsync();
 #pragma warning disable CS4014
-            FtpCommandProtocol(clientSocket);
+            FtpCommandProtocol(address, clientSocket);
 #pragma warning restore CS4014 
         }
     }
 
-    public static async Task FtpCommandProtocol(TcpClient commandSocket)
+    public static async Task FtpCommandProtocol(IPAddress address, TcpClient commandSocket)
     {
         using (commandSocket)
         {
@@ -1210,7 +1224,7 @@ public static class Extensions
                     var authenticated = false;
                     var rootDirectory = new DirectoryInfo(@"C:/Users/rong/Documents");
                     var offset = 0;
-                    var beningRenaming = false;
+                    var renamingFile = string.Empty;
                     File.AppendAllText($@"{AppDomain.CurrentDomain.BaseDirectory}\log.txt", string.Empty);
                     var namePrefix = "/";
                     var count = 0;
@@ -1222,17 +1236,17 @@ public static class Extensions
                         if (count > 0)
                         {
                             var command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
-                            Log($"{command}{Environment.NewLine}");
+                            Log($"{command}");
                             if (command.StartsWith("USER"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 authenticated = false;
                                 userName = command.Substring(command.IndexOf(' ') + 1);
                                 networkStream.WriteLine($"331 User {userName} logged in, needs password");
                             }
                             else if (command.StartsWith("PASS"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (!string.IsNullOrEmpty(userName))
                                 {
                                     var password = command.Substring(command.IndexOf(' ') + 1);
@@ -1253,15 +1267,15 @@ public static class Extensions
                             }
                             else if (command.StartsWith("SYST"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
-                                    networkStream.Write($"215 UNIX Type: L8{Environment.NewLine}");
+                                    networkStream.WriteLine($"215 UNIX Type: L8");
                                 }
                             }
                             else if (command.StartsWith("PWD"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     networkStream.WriteLine($"257 \"/{namePrefix.TrimStart("/")}\" is current directory.");
@@ -1269,27 +1283,38 @@ public static class Extensions
                             }
                             else if (command.StartsWith("CWD"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     try
                                     {
+                                        Log($"CWD from name-prefix: {namePrefix}");
                                         var pathName = command.Substring(command.IndexOf(' ') + 1);
-                                        if (!pathName.StartsWith("/"))
+                                        if (string.Equals(pathName, ".."))
                                         {
-                                            pathName = GetPath(namePrefix, pathName);
-                                        }
-
-                                        var directory = GetPath(rootDirectory.FullName, pathName);
-                                        if (Directory.Exists(directory))//&& must be subdirectory of root directory
-                                        {
-                                            namePrefix = pathName.Replace('\\', '/');
-                                            networkStream.Write($"250 Okay.{Environment.NewLine}");
+                                            namePrefix = namePrefix.IndexOf('/') != -1 ? namePrefix.Substring(0, namePrefix.LastIndexOf('/')) : string.Empty;
+                                            networkStream.WriteLine($"250 CWD Okay.");
                                         }
                                         else
                                         {
-                                            networkStream.WriteLine($"550 Not a valid directory.");
+                                            if (!pathName.StartsWith("/"))
+                                            {
+                                                pathName = GetPath(namePrefix, pathName);
+                                            }
+
+                                            var directory = GetPath(rootDirectory.FullName, pathName);
+                                            if (Directory.Exists(directory))//&& must be subdirectory of root directory
+                                            {
+                                                namePrefix = pathName.Replace('\\', '/');
+                                                networkStream.WriteLine($"250 Okay.");
+                                            }
+                                            else
+                                            {
+                                                networkStream.WriteLine($"550 Not a valid directory.");
+                                            }
                                         }
+
+                                        Log($"CWD to name-prefix: {namePrefix}");
                                     }
                                     catch
                                     {
@@ -1299,33 +1324,33 @@ public static class Extensions
                             }
                             else if (command.StartsWith("TYPE"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     var type = command.Substring(command.IndexOf(' ') + 1);
                                     if (type == "A")
                                     {
-                                        networkStream.Write($"200 ASCII transfer mode active.{Environment.NewLine}");
+                                        networkStream.WriteLine($"200 ASCII transfer mode active.");
                                     }
                                     else if (type == "I")
                                     {
-                                        networkStream.Write($"200 Binary transfer mode active.{Environment.NewLine}");
+                                        networkStream.WriteLine($"200 Binary transfer mode active.");
                                     }
                                     else
                                     {
-                                        networkStream.Write($"550 Error - unknown binary mode {type}{Environment.NewLine}");
+                                        networkStream.WriteLine($"550 Error - unknown binary mode {type}");
                                     }
                                 }
                             }
                             else if (command.StartsWith("PASV"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
-                                    passiveListner = new TcpListener(IPAddress.Parse("127.0.0.1"), 0);
+                                    passiveListner = new TcpListener(address, 0);
                                     passiveListner.Start();
                                     var m_nPort = ((IPEndPoint)passiveListner.LocalEndpoint).Port;
-                                    var sIpAddress = $"127,0,0,1,{(int)(m_nPort / 256)},{(m_nPort % 256)}";
+                                    var sIpAddress = $"{address.ToString().Replace('.', ',')},{(int)(m_nPort / 256)},{(m_nPort % 256)}";
                                     networkStream.WriteLine($"227 Entering Passive Mode ({sIpAddress})");
                                     dataSocket = passiveListner.AcceptTcpClient();
                                 }
@@ -1338,7 +1363,7 @@ public static class Extensions
                                 -A displays All files.
                                 -T when used with - l, displays the full month, day, year, hour, minute, and second for the file date/time.
                                 */
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     networkStream.WriteLine($"150 Opening data connection for LIST.");
@@ -1381,7 +1406,7 @@ public static class Extensions
                             }
                             else if (command.StartsWith("REST"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 var position = 0;
                                 if (int.TryParse(command.Substring(command.IndexOf(' ') + 1), out position))
                                 {
@@ -1399,12 +1424,13 @@ public static class Extensions
                                 rejects the RETR request with code 425 if no TCP connection was established
                                 rejects the RETR request with code 426 if the TCP connection was established but then broken by the client or by network failure; or
                                 rejects the RETR request with code 451 or 551 if the server had trouble reading the file from disk.*/
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     networkStream.WriteLine($"150 Opening data connection for RETR.");
                                     var fileName = command.Substring(command.IndexOf(' ') + 1);
                                     var filePath = GetPath(rootDirectory.FullName, namePrefix, fileName);
+                                    Log($"Retirve {filePath}");
                                     if (File.Exists(filePath))
                                     {
                                         if (dataSocket != null && dataSocket.Connected)
@@ -1441,7 +1467,7 @@ public static class Extensions
                                 rejects the STOR request with code 425 if no TCP connection was established
                                 rejects the STOR request with code 426 if the TCP connection was established but then broken by the client or by network failure; or
                                 rejects the STOR request with code 451, 452, or 552 if the server had trouble saving the file to disk.*/
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     networkStream.WriteLine($"150 Opening data connection for STOR.");
@@ -1479,7 +1505,7 @@ public static class Extensions
                             }
                             else if (command.StartsWith("APPE"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     networkStream.WriteLine($"150 Opening data connection for STOR.");
@@ -1517,7 +1543,7 @@ public static class Extensions
                             }
                             else if (command.StartsWith("DELE"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     //A typical server accepts DELE with code 250 if the file was successfully removed, or rejects DELE with code 450 or 550 if the removal failed.
@@ -1541,21 +1567,20 @@ public static class Extensions
                                     }
                                     else
                                     {
-                                        networkStream.WriteLine($"550 Dele failed");
+                                        networkStream.WriteLine($"550 DELE failed");
                                     }
                                 }
                             }
                             else if (command.StartsWith("PORT"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
-                                    //PORT 127,0,0,1,214,80
                                     var addressString = command.Substring(command.IndexOf(' ') + 1);
-                                    var y = addressString.Split(',');
+                                    var segments = addressString.Split(',');
                                     var tcpClient = new TcpClient();
-                                    var port = 256 * int.Parse(y[4]) + int.Parse(y[5]);
-                                    tcpClient.Connect(IPAddress.Parse(string.Join(".", new[] { y[0], y[1], y[2], y[3] })), port);
+                                    var port = 256 * int.Parse(segments[4]) + int.Parse(segments[5]);
+                                    tcpClient.Connect(IPAddress.Parse(string.Join(".", segments.Take(4).ToArray())), port);
                                     dataSocket = tcpClient;
                                     networkStream.WriteLine($"200 PORT successful.");
                                 }
@@ -1570,91 +1595,161 @@ public static class Extensions
                             }
                             else if (command.StartsWith("SIZE"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     var pathName = command.Substring(command.IndexOf(' ') + 1).Trim('/');
-                                    var path = Path.GetFullPath(Path.Combine(rootDirectory.FullName, namePrefix, pathName));
+                                    var path = GetPath(rootDirectory.FullName, namePrefix, pathName);
+                                    Log($"Size of {path}");
                                     var size = File.Exists(path) ? (new FileInfo(path).Length) : 0;
                                     networkStream.WriteLine($"213 {size}");
                                 }
                             }
                             else if (command.StartsWith("CDUP"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
-                                    if (namePrefix.IndexOf('/') != -1)
-                                    {
-                                        namePrefix = namePrefix.Substring(0, namePrefix.LastIndexOf('/'));
-                                    }
-
+                                    Log($"CDUP from name-prefix: {namePrefix}");
+                                    namePrefix = namePrefix.IndexOf('/') != -1 ? namePrefix.Substring(0, namePrefix.LastIndexOf('/')) : string.Empty;
+                                    Log($"CDUP to name-prefix: {namePrefix}");
                                     networkStream.WriteLine($"250 CWD command successful.");
-                                }
-                            }
-                            else if (command.StartsWith("RNFR"))
-                            {
-                                beningRenaming = true;
-                                if (Authenticate(networkStream, authenticated))
-                                {
-                                    //A typical server accepts RNFR with code 350 if the file exists, or rejects RNFR with code 450 or 550 otherwise.
-                                    networkStream.WriteLine($"550 Unknown command");
-                                }
-                            }
-                            else if (command.StartsWith("RNFR"))
-                            {
-                                if (beningRenaming)
-                                {
-                                    if (Authenticate(networkStream, authenticated))
-                                    {
-                                        //A typical server accepts RNTO with code 250 if the file was renamed successfully, or rejects RNTO with code 550 or 553 otherwise.
-                                        networkStream.WriteLine($"550 Unknown command");
-                                    }
-                                }
-                                else
-                                {
-                                    networkStream.WriteLine($"503 XXXXXXXXXXX");
-                                    //RNTO must come immediately after RNFR; otherwise the server may reject RNTO with code .
                                 }
                             }
                             else if (command.StartsWith("RMD") || command.StartsWith("XRMD"))
                             {
-                                beningRenaming = false;
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
                                     //A typical server accepts RMD with code 250 if the directory was successfully removed, or rejects RMD with code 550 if the removal failed.
-                                    networkStream.WriteLine($"550 Unknown command");
+                                    var pathName = command.Substring(command.IndexOf(' ') + 1);
+                                    if (!pathName.StartsWith("/"))
+                                    {
+                                        pathName = GetPath(namePrefix, pathName);
+                                    }
+
+                                    var directory = GetPath(rootDirectory.FullName, pathName);
+                                    if (Directory.Exists(directory))
+                                    {
+                                        try
+                                        {
+                                            Directory.Delete(directory);
+                                        }
+                                        catch
+                                        {
+                                            networkStream.WriteLine($"550 ERROR RMD");
+                                        }
+
+                                        if (!Directory.Exists(directory))
+                                        {
+                                            networkStream.WriteLine($"250 RMD sucessful");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        networkStream.WriteLine($"550 RMD DIRECTY NOT EXISTS");
+                                    }
                                 }
                             }
                             else if (command.StartsWith("MKD") || command.StartsWith("XMKD"))
                             {
-                                beningRenaming = false;
+                                /*If the server accepts MKD (required code 257), its response includes the pathname of the directory, in the same format used for responses to PWD.
+                                A typical server accepts MKD with code 250 if the directory was successfully created, or rejects MKD with code 550 if the creation failed.*/
+                                renamingFile = string.Empty;
                                 if (Authenticate(networkStream, authenticated))
                                 {
-                                    /*If the server accepts MKD (required code 257), its response includes the pathname of the directory, in the same format used for responses to PWD.
-                                    A typical server accepts MKD with code 250 if the directory was successfully created, or rejects MKD with code 550 if the creation failed.*/
-                                    networkStream.WriteLine($"550 Unknown command");
+                                    var pathName = command.Substring(command.IndexOf(' ') + 1);
+                                    if (!pathName.StartsWith("/"))
+                                    {
+                                        pathName = GetPath(namePrefix, pathName);
+                                    }
+
+                                    var directory = GetPath(rootDirectory.FullName, pathName);
+                                    if (!Directory.Exists(directory))
+                                    {
+                                        try
+                                        {
+                                            Directory.CreateDirectory(directory);
+                                        }
+                                        catch
+                                        {
+                                            networkStream.WriteLine($"550 ERROR MKD");
+                                        }
+
+                                        if (Directory.Exists(directory))
+                                        {
+                                            networkStream.WriteLine($"250 XXXXXXXXXXXXXX");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        networkStream.WriteLine($"550 ERROR MKD");
+                                    }
                                 }
                             }
-                            /*The ALLO verb
+                            else if (command.StartsWith("NOOP"))
+                            {
+                                networkStream.WriteLine($"200 XXXXXXXXXXXXXX");
+                            }
+                            else if (command.StartsWith("RNFR"))
+                            {
+                                renamingFile = string.Empty;
+                                if (Authenticate(networkStream, authenticated))
+                                {
+                                    var pathName = command.Substring(command.IndexOf(' ') + 1);
+                                    if (!pathName.StartsWith("/"))
+                                    {
+                                        pathName = GetPath(namePrefix, pathName);
+                                    }
 
-ALLO is obsolete. The server should accept any ALLO request with code 202.*/
-                            /*else if (command.StartsWith("RNFR"))
+                                    var filePath = GetPath(rootDirectory.FullName, pathName);
+                                    if (File.Exists(filePath))
+                                    {
+                                        renamingFile = filePath;
+                                        networkStream.WriteLine($"350 XXXXXXXXXXXXXX");
+                                    }
+                                    else
+                                    {
+                                        networkStream.WriteLine($"550 ERROR RNFR");
+                                    }
+                                }
+                            }
+                            else if (command.StartsWith("RNTO"))
                             {
+                                if (Authenticate(networkStream, authenticated))
+                                {
+                                    if (!string.IsNullOrEmpty(renamingFile))
+                                    {
+                                        var pathName = command.Substring(command.IndexOf(' ') + 1);
+                                        if (!pathName.StartsWith("/"))
+                                        {
+                                            pathName = GetPath(namePrefix, pathName);
+                                        }
 
-                            }*/
-                            /*else if (command.StartsWith("APPE"))
+                                        var filePath = GetPath(rootDirectory.FullName, pathName);
+                                        if (!File.Exists(filePath))
+                                        {
+                                            File.Move(renamingFile, filePath);
+                                            networkStream.WriteLine($"250 XXXXXXXXXXXXXX");
+                                        }
+                                        else
+                                        {
+                                            networkStream.WriteLine($"550 ERROR RNTO");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        networkStream.WriteLine($"503 RNFR REQUIRED");
+                                    }
+                                }
+                            }
+                            else if (command.StartsWith("FEAT"))
                             {
-                            }*/
-                            /*else if (command.StartsWith("REST"))
-                            {
-                            }*/
-                            /*else if (command.StartsWith("FEAT"))
-                            {
-                                networkStream.Write($"211- Features:");
-                                networkStream.Write($" UTF8");
-                                networkStream.Write($"211 END");
-                        }*/
+                                networkStream.WriteLine($"211- Features:");
+                                networkStream.WriteLine($" UTF8");
+                                networkStream.WriteLine($"211 END");
+                            }
+                            /*The ALLO verb ALLO is obsolete. The server should accept any ALLO request with code 202.*/
                             else
                             {
                                 networkStream.WriteLine($"550 Unknown command");
@@ -1687,6 +1782,11 @@ ALLO is obsolete. The server should accept any ALLO request with code 202.*/
 
     private static string GetPath(string path1, string namePrefix, string fileName)
     {
+        if (fileName.StartsWith(namePrefix))
+        {
+            namePrefix = string.Empty;
+        }
+
         return Path.Combine(GetPath(path1, namePrefix), fileName.TrimStart("/"));
     }
 
