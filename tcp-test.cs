@@ -1779,14 +1779,14 @@ public static class Extensions
                                 renamingFile = string.Empty;
                                 networkStream.WriteLine($"550 Unknown command");
                             }
-                            }
-                        } while (count > 0) ;
-                    }
+                        }
+                    } while (count > 0);
+                }
             }
             catch (Exception ex)
             {
                 Log(ex);
-            } 
+            }
         }
     }
 
@@ -1878,6 +1878,28 @@ public static class Extensions
         return stringBuilder.ToString();
     }
 
+    public static int ReadInt32V2(this BinaryReader reader)
+    {
+        var bytes = reader.ReadBytes(sizeof(Int32));
+        if (BitConverter.IsLittleEndian)
+        {
+            Array.Reverse(bytes);
+        }
+
+        return BitConverter.ToInt32(bytes, 0);
+    }
+
+    public static void WriteInt32(this BinaryWriter write,int value)
+    {
+        var bytes = BitConverter.GetBytes(value);
+        if (BitConverter.IsLittleEndian)
+        {
+            Array.Reverse(bytes);
+        }
+
+        write.Write(bytes);
+    }
+
     public static bool IsDirectory(this FileSystemInfo m_theInfo)
     {
         return (m_theInfo.Attributes & System.IO.FileAttributes.Directory) != 0;
@@ -1967,5 +1989,295 @@ public static class Extensions
         }
         Uri folderUri = new Uri(folder);
         return Uri.UnescapeDataString(folderUri.MakeRelativeUri(pathUri).ToString().Replace('/', Path.DirectorySeparatorChar));
+    }
+}
+
+public class Sulfate
+{
+    public async Task Start(string prefix)
+    {
+        //SITE chmod 644 /My Web Sites/WebSite1/w-brand.png
+        var port = 22;
+        if (prefix.IndexOf(":") != -1)
+        {
+            var number = 0;
+            if (int.TryParse(prefix.Substring(prefix.IndexOf(":") + 1), out number))
+            {
+                port = number;
+            }
+
+            prefix = prefix.Substring(0, prefix.IndexOf(":"));
+        }
+
+        var address = IPAddress.Parse(prefix);
+        var listener = new TcpListener(address, port);
+
+        try
+        {
+            listener.Start();
+            while (true)
+            {
+                var clientSocket = await listener.AcceptTcpClientAsync();
+                ThreadPool.QueueUserWorkItem(async delegate
+                {
+                    await FtpCommandProtocol(address, clientSocket);
+                });
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    public async Task FtpCommandProtocol(IPAddress address, TcpClient commandSocket)
+    {
+        using (commandSocket)
+        {
+            try
+            {
+                using (var networkStream = commandSocket.GetStream())
+                {
+                    /*
+                    530 Not logged in.
+                    530 Login authentication failed.
+                    530 Password rejected.
+                    */
+                    //networkStream.WriteLine($"220 WELCOME");
+                    var userName = string.Empty;
+                    var buffer = new byte[500];
+                    var authenticated = false;
+                    var rootDirectory = new DirectoryInfo(@"C:/Users/rong/Documents");
+                    var offset = 0;
+                    var renamingFile = string.Empty;
+                    File.AppendAllText($@"{AppDomain.CurrentDomain.BaseDirectory}\log.txt", string.Empty);
+                    var namePrefix = "/";
+                    var count = 0;
+                    var dataSocket = default(TcpClient);
+                    do
+                    {
+                        count = await networkStream.ReadAsync(buffer, 0, buffer.Length);
+                        if (count > 0)
+                        {
+                            var command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
+                            //Log($"{command}");
+                            var i = 0;
+                        }
+                    } while (count > 0);
+                }
+            }
+            catch (Exception ex)
+            {
+                //Log(ex);
+            }
+        }
+    }
+}
+
+public class Tclote
+{
+    private Dictionary<string, string> config = new Dictionary<string, string>();
+
+    public Tclote()
+    {
+        config.Add("kex_algorithms", "diffie-hellman-group1-sha1,diffie-hellman-group-exchange-sha1");
+        config.Add("server_host_key_algorithms", "ssh-rsa,ssh-dss");
+        config.Add("encryption_algorithms_server_to_client", "3des-cbc,aes128-cbc");
+        config.Add("encryption_algorithms_client_to_server", "3des-cbc,aes128-cbc");
+        config.Add("mac_algorithms_client_to_server", "hmac-md5,hmac-sha1");
+        config.Add("mac_algorithms_server_to_client", "hmac-md5,hmac-sha1");
+        config.Add("compression_algorithms_client_to_server", "none");
+        config.Add("compression_algorithms_server_to_client", "none");
+        config.Add("languages_client_to_server", "");
+        config.Add("languages_server_to_client", "");
+        config.Add("diffie-hellman-group-exchange-sha1", "Tamir.SharpSsh.jsch.DHGEX");
+        config.Add("diffie-hellman-group1-sha1", "Tamir.SharpSsh.jsch.DHG1");
+        config.Add("dh", "Tamir.SharpSsh.jsch.jce.DH");
+        config.Add("3des-cbc", "Tamir.SharpSsh.jsch.jce.TripleDESCBC");
+        config.Add("hmac-sha1", "Tamir.SharpSsh.jsch.jce.HMACSHA1");
+        config.Add("hmac-sha1-96", "Tamir.SharpSsh.jsch.jce.HMACSHA196");
+        config.Add("hmac-md5", "Tamir.SharpSsh.jsch.jce.HMACMD5");
+        config.Add("hmac-md5-96", "Tamir.SharpSsh.jsch.jce.HMACMD596");
+        config.Add("sha-1", "Tamir.SharpSsh.jsch.jce.SHA1");
+        config.Add("md5", "Tamir.SharpSsh.jsch.jce.MD5");
+        config.Add("signature.dss", "Tamir.SharpSsh.jsch.jce.SignatureDSA");
+        config.Add("signature.rsa", "Tamir.SharpSsh.jsch.jce.SignatureRSA");
+        config.Add("keypairgen.dsa", "Tamir.SharpSsh.jsch.jce.KeyPairGenDSA");
+        config.Add("keypairgen.rsa", "Tamir.SharpSsh.jsch.jce.KeyPairGenRSA");
+        config.Add("random", "Tamir.SharpSsh.jsch.jce.Random");
+        config.Add("aes128-cbc", "Tamir.SharpSsh.jsch.jce.AES128CBC");
+        config.Add("StrictHostKeyChecking", "ask");
+    }
+
+    public void Connect(string prefix)
+    {
+        var port = 22;
+        if (prefix.IndexOf(":") != -1)
+        {
+            var number = 0;
+            if (int.TryParse(prefix.Substring(prefix.IndexOf(":") + 1), out number))
+            {
+                port = number;
+            }
+
+            prefix = prefix.Substring(0, prefix.IndexOf(":"));
+        }
+
+        var tcpClient = new TcpClient();
+        tcpClient.Connect(prefix, port);
+        FtpCommandProtocol(tcpClient);
+    }
+
+    public void FtpCommandProtocol(TcpClient commandSocket)
+    {
+        using (commandSocket)
+        {
+            try
+            {
+                using (var networkStream = commandSocket.GetStream())
+                {
+                    /*
+                    530 Not logged in.
+                    530 Login authentication failed.
+                    530 Password rejected.
+                    */
+                    //networkStream.WriteLine($"220 WELCOME");
+                    var userName = string.Empty;
+                    var buffer = new byte[5000];
+                    var authenticated = false;
+                    var rootDirectory = new DirectoryInfo(@"C:/Users/rong/Documents");
+                    var offset = 0;
+                    var renamingFile = string.Empty;
+                    File.AppendAllText($@"{AppDomain.CurrentDomain.BaseDirectory}\log.txt", string.Empty);
+                    var namePrefix = "/";
+                    var count = 0;
+                    count = networkStream.Read(buffer, 0, buffer.Length);
+                    if (count > 0)
+                    {
+                        var command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
+                        networkStream.WriteLine("SSH-2.0-LiteSSH_6.6.1p1 Ubuntu-2ubuntu2.6");
+                        count = networkStream.Read(buffer, 0, buffer.Length);
+                        using (var memory = new MemoryStream(buffer, 0, count))
+                        {
+                            Parse_SSH_MSG_KEXINIT(memory);
+                        }
+
+                        using (var memory = new MemoryStream())
+                        {
+                            using (var writer = new BinaryWriter(memory,Encoding.UTF8))
+                            {
+                                var SSH_MSG_KEXINIT = 20;
+                                memory.Seek(5, SeekOrigin.Begin);
+                                writer.Write((byte)SSH_MSG_KEXINIT);
+                                var random = new Random();
+                                var cookie = new Byte[16];
+                                random.NextBytes(cookie);
+                                writer.Write(cookie);
+                                var kex_algorithms = Encoding.UTF8.GetBytes(config["kex_algorithms"]);
+                                writer.WriteInt32(kex_algorithms.Length);
+                                writer.Write(kex_algorithms);
+                                var server_host_key_algorithms = Encoding.UTF8.GetBytes(config["server_host_key_algorithms"]);
+                                writer.WriteInt32(server_host_key_algorithms.Length);
+                                writer.Write(server_host_key_algorithms);
+                                var encryption_algorithms_client_to_server = Encoding.UTF8.GetBytes(config["encryption_algorithms_client_to_server"]);
+                                writer.WriteInt32(encryption_algorithms_client_to_server.Length);
+                                writer.Write(encryption_algorithms_client_to_server);
+                                var encryption_algorithms_server_to_client = Encoding.UTF8.GetBytes(config["encryption_algorithms_server_to_client"]);
+                                writer.WriteInt32(encryption_algorithms_server_to_client.Length);
+                                writer.Write(encryption_algorithms_server_to_client);
+                                var mac_algorithms_client_to_server = Encoding.UTF8.GetBytes(config["mac_algorithms_client_to_server"]);
+                                writer.WriteInt32(mac_algorithms_client_to_server.Length);
+                                writer.Write(mac_algorithms_client_to_server);
+                                var mac_algorithms_server_to_client = Encoding.UTF8.GetBytes(config["mac_algorithms_server_to_client"]);
+                                writer.WriteInt32(mac_algorithms_server_to_client.Length);
+                                writer.Write(mac_algorithms_server_to_client);
+                                var compression_algorithms_client_to_server = Encoding.UTF8.GetBytes(config["compression_algorithms_client_to_server"]);
+                                writer.WriteInt32(compression_algorithms_client_to_server.Length);
+                                writer.Write(compression_algorithms_client_to_server);
+                                var compression_algorithms_server_to_client = Encoding.UTF8.GetBytes(config["compression_algorithms_server_to_client"]);
+                                writer.WriteInt32(compression_algorithms_server_to_client.Length);
+                                writer.Write(compression_algorithms_server_to_client);
+                                var languages_client_to_server = Encoding.UTF8.GetBytes(config["languages_client_to_server"]);
+                                writer.WriteInt32(languages_client_to_server.Length);
+                                writer.Write(languages_client_to_server);
+                                var languages_server_to_client = Encoding.UTF8.GetBytes(config["languages_server_to_client"]);
+                                writer.WriteInt32(languages_server_to_client.Length);
+                                writer.Write(languages_server_to_client);
+                                var first_kex_packet_follows = false;
+                                writer.Write(first_kex_packet_follows);
+                                var reserved_for_future_extension = 0;
+                                writer.WriteInt32(reserved_for_future_extension);
+                                var padding_length = 0;
+                                var payload_length = (int)memory.Position - 5;
+                                if (memory.Position % 8 != 0)
+                                {
+                                    padding_length = 16 - (int)memory.Position % 8;
+                                }
+
+                                memory.Seek(4, SeekOrigin.Begin);
+                                writer.Write((byte)padding_length);
+                                if (padding_length > 0)
+                                {
+                                    memory.Seek(0, SeekOrigin.End);
+                                    random = new Random();
+                                    var padding = new Byte[padding_length];
+                                    random.NextBytes(padding);
+                                    writer.Write(padding);
+                                }
+
+                                var packet_length = payload_length + padding_length + 1;
+                                memory.Seek(0, SeekOrigin.Begin);
+                                writer.WriteInt32(packet_length);
+                                //Parse_SSH_MSG_KEXINIT(memory);
+                                memory.WriteTo(networkStream);
+                            }
+                        }
+                        count = networkStream.Read(buffer, 0, buffer.Length);
+                        command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
+                        //Log($"{command}");
+                        var i = 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                //Log(ex);
+            }
+        }
+    }
+
+    private void Parse_SSH_MSG_KEXINIT(MemoryStream memory)
+    {
+        using (var reader = new BinaryReader(memory))
+        {
+            memory.Seek(0, SeekOrigin.Begin);
+            var package_length = reader.ReadInt32V2();
+            var paddingLength = (int)reader.ReadByte();
+            int messageCode = (int)reader.ReadByte();
+            var cookie = reader.ReadBytes(16);
+            var kex_algorithm_length = reader.ReadInt32V2();
+            var kex_algorithms = Encoding.UTF8.GetString(reader.ReadBytes(kex_algorithm_length));
+            var server_host_key_algorithms_length = reader.ReadInt32V2();
+            var server_host_key_algorithms = Encoding.UTF8.GetString(reader.ReadBytes(server_host_key_algorithms_length));
+            var encryption_algorithms_client_to_server_length = reader.ReadInt32V2();
+            var encryption_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_client_to_server_length));
+            var encryption_algorithms_server_to_client_length = reader.ReadInt32V2();
+            var encryption_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_server_to_client_length));
+            var mac_algorithms_client_to_server_length = reader.ReadInt32V2();
+            var mac_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_client_to_server_length));
+            var mac_algorithms_server_to_client_length = reader.ReadInt32V2();
+            var mac_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_server_to_client_length));
+            var compression_algorithms_client_to_server_length = reader.ReadInt32V2();
+            var compression_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_client_to_server_length));
+            var compression_algorithms_server_to_client_length = reader.ReadInt32V2();
+            var compression_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_server_to_client_length));
+            var languages_client_to_server_length = reader.ReadInt32V2();
+            var languages_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(languages_client_to_server_length));
+            var languages_server_to_client_length = reader.ReadInt32V2();
+            var languages_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(languages_server_to_client_length));
+            var first_kex_packet_follows = reader.ReadBoolean();
+            var reserved_for_future_extension = reader.ReadInt32();
+            var padding = reader.ReadBytes(paddingLength);
+        }
     }
 }
