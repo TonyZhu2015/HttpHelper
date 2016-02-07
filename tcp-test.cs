@@ -1889,7 +1889,7 @@ public static class Extensions
         return BitConverter.ToInt32(bytes, 0);
     }
 
-    public static void WriteInt32(this BinaryWriter write,int value)
+    public static void WriteInt32(this BinaryWriter write, int value)
     {
         var bytes = BitConverter.GetBytes(value);
         if (BitConverter.IsLittleEndian)
@@ -2157,14 +2157,16 @@ public class Tclote
                         var command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
                         networkStream.WriteLine("SSH-2.0-LiteSSH_6.6.1p1 Ubuntu-2ubuntu2.6");
                         count = networkStream.Read(buffer, 0, buffer.Length);
+                        var server_SSH_MSG_KEXINIT = default(SSH_MSG_KEXINIT);
                         using (var memory = new MemoryStream(buffer, 0, count))
                         {
-                            Parse_SSH_MSG_KEXINIT(memory);
+                            server_SSH_MSG_KEXINIT = Read_SSH_MSG_KEXINIT(memory);
                         }
 
+                        var local_SSH_MSG_KEXINIT = Get_SSH_MSG_KEXINIT();
                         using (var memory = new MemoryStream())
                         {
-                            using (var writer = new BinaryWriter(memory,Encoding.UTF8))
+                            using (var writer = new BinaryWriter(memory, Encoding.UTF8))
                             {
                                 var SSH_MSG_KEXINIT = 20;
                                 memory.Seek(5, SeekOrigin.Begin);
@@ -2232,6 +2234,8 @@ public class Tclote
                                 memory.WriteTo(networkStream);
                             }
                         }
+
+                        var guess_SSH_MSG_KEXINIT = Guess_SSH_MSG_KEXINIT(server_SSH_MSG_KEXINIT, local_SSH_MSG_KEXINIT);
                         count = networkStream.Read(buffer, 0, buffer.Length);
                         command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
                         //Log($"{command}");
@@ -2246,8 +2250,45 @@ public class Tclote
         }
     }
 
-    private void Parse_SSH_MSG_KEXINIT(MemoryStream memory)
+    private SSH_MSG_KEXINIT Guess_SSH_MSG_KEXINIT(SSH_MSG_KEXINIT server, SSH_MSG_KEXINIT local)
     {
+        var result = new SSH_MSG_KEXINIT();
+        result.kex_algorithms = Match_SSH_MSG_KEXINIT(local.kex_algorithms, server.kex_algorithms);
+        result.server_host_key_algorithms = Match_SSH_MSG_KEXINIT(local.server_host_key_algorithms, server.server_host_key_algorithms);
+        result.encryption_algorithms_client_to_server = Match_SSH_MSG_KEXINIT(local.encryption_algorithms_client_to_server, server.encryption_algorithms_client_to_server);
+        result.encryption_algorithms_server_to_client = Match_SSH_MSG_KEXINIT(local.encryption_algorithms_server_to_client, server.encryption_algorithms_server_to_client);
+        result.compression_algorithms_client_to_server = Match_SSH_MSG_KEXINIT(local.compression_algorithms_client_to_server, server.compression_algorithms_client_to_server);
+        result.compression_algorithms_server_to_client = Match_SSH_MSG_KEXINIT(local.compression_algorithms_server_to_client, server.compression_algorithms_server_to_client);
+        result.mac_algorithms_client_to_server = Match_SSH_MSG_KEXINIT(local.mac_algorithms_client_to_server, server.mac_algorithms_client_to_server);
+        result.mac_algorithms_server_to_client = Match_SSH_MSG_KEXINIT(local.mac_algorithms_server_to_client, server.mac_algorithms_server_to_client);
+        return result;
+    }
+
+    private string Match_SSH_MSG_KEXINIT(string localAlgorithms, string serverAlgorithms)
+    {
+        return Match_SSH_MSG_KEXINIT(localAlgorithms.Split(','), serverAlgorithms.Split(','));
+    }
+
+    private string Match_SSH_MSG_KEXINIT(string[] localAlgorithms, string[] serverAlgorithms)
+    {
+        var result = string.Empty;
+        foreach (var localAlgorithm in localAlgorithms)
+        {
+            foreach (var serverAlgorithm in serverAlgorithms)
+            {
+                if (string.Equals(localAlgorithm, serverAlgorithm))
+                {
+                    return serverAlgorithm;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private SSH_MSG_KEXINIT Read_SSH_MSG_KEXINIT(MemoryStream memory)
+    {
+        var result = new SSH_MSG_KEXINIT();
         using (var reader = new BinaryReader(memory))
         {
             memory.Seek(0, SeekOrigin.Begin);
@@ -2256,28 +2297,60 @@ public class Tclote
             int messageCode = (int)reader.ReadByte();
             var cookie = reader.ReadBytes(16);
             var kex_algorithm_length = reader.ReadInt32V2();
-            var kex_algorithms = Encoding.UTF8.GetString(reader.ReadBytes(kex_algorithm_length));
+            result.kex_algorithms = Encoding.UTF8.GetString(reader.ReadBytes(kex_algorithm_length));
             var server_host_key_algorithms_length = reader.ReadInt32V2();
-            var server_host_key_algorithms = Encoding.UTF8.GetString(reader.ReadBytes(server_host_key_algorithms_length));
+            result.server_host_key_algorithms = Encoding.UTF8.GetString(reader.ReadBytes(server_host_key_algorithms_length));
             var encryption_algorithms_client_to_server_length = reader.ReadInt32V2();
-            var encryption_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_client_to_server_length));
+            result.encryption_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_client_to_server_length));
             var encryption_algorithms_server_to_client_length = reader.ReadInt32V2();
-            var encryption_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_server_to_client_length));
+            result.encryption_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_server_to_client_length));
             var mac_algorithms_client_to_server_length = reader.ReadInt32V2();
-            var mac_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_client_to_server_length));
+            result.mac_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_client_to_server_length));
             var mac_algorithms_server_to_client_length = reader.ReadInt32V2();
-            var mac_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_server_to_client_length));
+            result.mac_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_server_to_client_length));
             var compression_algorithms_client_to_server_length = reader.ReadInt32V2();
-            var compression_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_client_to_server_length));
+            result.compression_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_client_to_server_length));
             var compression_algorithms_server_to_client_length = reader.ReadInt32V2();
-            var compression_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_server_to_client_length));
+            result.compression_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_server_to_client_length));
             var languages_client_to_server_length = reader.ReadInt32V2();
-            var languages_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(languages_client_to_server_length));
+            result.languages_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(languages_client_to_server_length));
             var languages_server_to_client_length = reader.ReadInt32V2();
-            var languages_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(languages_server_to_client_length));
+            result.languages_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(languages_server_to_client_length));
             var first_kex_packet_follows = reader.ReadBoolean();
             var reserved_for_future_extension = reader.ReadInt32();
             var padding = reader.ReadBytes(paddingLength);
         }
+
+        return result;
     }
+
+    private SSH_MSG_KEXINIT Get_SSH_MSG_KEXINIT()
+    {
+        var result = new SSH_MSG_KEXINIT();
+        result.kex_algorithms = config["kex_algorithms"];
+        result.server_host_key_algorithms = config["server_host_key_algorithms"];
+        result.encryption_algorithms_client_to_server = config["encryption_algorithms_client_to_server"];
+        result.encryption_algorithms_server_to_client = config["encryption_algorithms_server_to_client"];
+        result.mac_algorithms_client_to_server = config["mac_algorithms_client_to_server"];
+        result.mac_algorithms_server_to_client = config["mac_algorithms_server_to_client"];
+        result.compression_algorithms_client_to_server = config["compression_algorithms_client_to_server"];
+        result.compression_algorithms_server_to_client = config["compression_algorithms_server_to_client"];
+        result.languages_client_to_server = config["languages_client_to_server"];
+        result.languages_server_to_client = config["languages_server_to_client"];
+        return result;
+    }
+}
+
+public class SSH_MSG_KEXINIT
+{
+    public string compression_algorithms_client_to_server { get; set; }
+    public string compression_algorithms_server_to_client { get; set; }
+    public string encryption_algorithms_client_to_server { get; set; }
+    public string encryption_algorithms_server_to_client { get; set; }
+    public string kex_algorithms { get; set; }
+    public string languages_client_to_server { get; set; }
+    public string languages_server_to_client { get; set; }
+    public string mac_algorithms_client_to_server { get; set; }
+    public string mac_algorithms_server_to_client { get; set; }
+    public string server_host_key_algorithms { get; set; }
 }
