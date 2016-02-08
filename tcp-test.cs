@@ -3,13 +3,13 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
-using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Net;
 using System.Net.Sockets;
+using System.Numerics;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -1148,6 +1148,22 @@ public static class Extensions
         return tcpListener.AcceptTcpClient();
     }
 
+    public static BigInteger ModPow(this BigInteger g, BigInteger e, BigInteger p)
+    {
+        return BigInteger.ModPow(g, e, p);
+    }
+
+    public static int BitLength(this BigInteger bigInteger)
+    {
+        var result = 0;
+        do
+        {
+            result++;
+            bigInteger /= 2;
+        } while (bigInteger != 0);
+        return result;
+    }
+
     public static void WriteLine(this NetworkStream stream, string message)
     {
         stream.Write($"{message}{Environment.NewLine}");
@@ -2090,6 +2106,7 @@ public class Tclote
         config.Add("compression_algorithms_server_to_client", "none");
         config.Add("languages_client_to_server", "");
         config.Add("languages_server_to_client", "");
+
         config.Add("diffie-hellman-group-exchange-sha1", "Tamir.SharpSsh.jsch.DHGEX");
         config.Add("diffie-hellman-group1-sha1", "Tamir.SharpSsh.jsch.DHG1");
         config.Add("dh", "Tamir.SharpSsh.jsch.jce.DH");
@@ -2236,6 +2253,46 @@ public class Tclote
                         }
 
                         var guess_SSH_MSG_KEXINIT = Guess_SSH_MSG_KEXINIT(server_SSH_MSG_KEXINIT, local_SSH_MSG_KEXINIT);
+                        using (var memory = new MemoryStream())
+                        {
+                            using (var writer = new BinaryWriter(memory, Encoding.UTF8))
+                            {
+                                memory.Seek(5, SeekOrigin.Begin);
+                                var diffieHellmanGroup1diff = new DiffieHellmanGroup1();
+                                var e = diffieHellmanGroup1diff.getE();
+                                int SSH_MSG_KEXDH_INIT = 30;
+                                writer.Write((byte)SSH_MSG_KEXDH_INIT);
+                                WriteMPInt(writer, e);
+                            }
+
+                            memory.WriteTo(networkStream);
+                        }
+
+                        /*
+                       client :
+     byte    SSH_MSG_KEX_DH_GEX_INIT
+     mpint   e
+
+   The server responds with:
+     byte    SSH_MSG_KEX_DH_GEX_REPLY
+     string  server public host key and certificates (K_S)
+     mpint   f
+     string  signature of H
+                        */
+
+                        //case SSH_MSG_KEXDH_REPLY:
+                        //K_S = _buf.getString();
+                        //// K_S is server_key_blob, which includes ....
+                        //// string ssh-dss
+                        //// impint p of dsa
+                        //// impint q of dsa
+                        //// impint g of dsa
+                        //// impint pub_key of dsa
+                        ////System.out.print("K_S: "); //dump(K_S, 0, K_S.length);
+                        //byte[] f = _buf.getMPInt();
+                        //byte[] sig_of_H = _buf.getString();
+
+                        //SSH_MSG_CHANNEL_OPEN
                         count = networkStream.Read(buffer, 0, buffer.Length);
                         command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
                         //Log($"{command}");
@@ -2248,6 +2305,29 @@ public class Tclote
                 //Log(ex);
             }
         }
+    }
+
+    public void WriteMPInt(BinaryWriter writer, byte[] bytes)
+    {
+        int length = bytes.Length;
+        if ((bytes[0] & 0x80) != 0)
+        {
+            length++;
+            writer.WriteInt32(length);
+            writer.Write((byte)0);
+        }
+        else
+        {
+            writer.WriteInt32(length);
+        }
+
+        writer.Write(bytes);
+    }
+
+    public byte[] ReadString(BinaryReader reader)
+    {
+        var length = reader.ReadInt32V2();
+        return reader.ReadBytes(length);
     }
 
     private SSH_MSG_KEXINIT Guess_SSH_MSG_KEXINIT(SSH_MSG_KEXINIT server, SSH_MSG_KEXINIT local)
@@ -2353,4 +2433,86 @@ public class SSH_MSG_KEXINIT
     public string mac_algorithms_client_to_server { get; set; }
     public string mac_algorithms_server_to_client { get; set; }
     public string server_host_key_algorithms { get; set; }
+}
+
+public class DiffieHellmanGroup1
+{
+    internal static byte[] g = new byte[] { 2 };
+    internal static byte[] p = new byte[]{
+                                              (byte)0x00,
+                                              (byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,
+                                              (byte)0xC9,(byte)0x0F,(byte)0xDA,(byte)0xA2,(byte)0x21,(byte)0x68,(byte)0xC2,(byte)0x34,
+                                              (byte)0xC4,(byte)0xC6,(byte)0x62,(byte)0x8B,(byte)0x80,(byte)0xDC,(byte)0x1C,(byte)0xD1,
+                                              (byte)0x29,(byte)0x02,(byte)0x4E,(byte)0x08,(byte)0x8A,(byte)0x67,(byte)0xCC,(byte)0x74,
+                                              (byte)0x02,(byte)0x0B,(byte)0xBE,(byte)0xA6,(byte)0x3B,(byte)0x13,(byte)0x9B,(byte)0x22,
+                                              (byte)0x51,(byte)0x4A,(byte)0x08,(byte)0x79,(byte)0x8E,(byte)0x34,(byte)0x04,(byte)0xDD,
+                                              (byte)0xEF,(byte)0x95,(byte)0x19,(byte)0xB3,(byte)0xCD,(byte)0x3A,(byte)0x43,(byte)0x1B,
+                                              (byte)0x30,(byte)0x2B,(byte)0x0A,(byte)0x6D,(byte)0xF2,(byte)0x5F,(byte)0x14,(byte)0x37,
+                                              (byte)0x4F,(byte)0xE1,(byte)0x35,(byte)0x6D,(byte)0x6D,(byte)0x51,(byte)0xC2,(byte)0x45,
+                                              (byte)0xE4,(byte)0x85,(byte)0xB5,(byte)0x76,(byte)0x62,(byte)0x5E,(byte)0x7E,(byte)0xC6,
+                                              (byte)0xF4,(byte)0x4C,(byte)0x42,(byte)0xE9,(byte)0xA6,(byte)0x37,(byte)0xED,(byte)0x6B,
+                                              (byte)0x0B,(byte)0xFF,(byte)0x5C,(byte)0xB6,(byte)0xF4,(byte)0x06,(byte)0xB7,(byte)0xED,
+                                              (byte)0xEE,(byte)0x38,(byte)0x6B,(byte)0xFB,(byte)0x5A,(byte)0x89,(byte)0x9F,(byte)0xA5,
+                                              (byte)0xAE,(byte)0x9F,(byte)0x24,(byte)0x11,(byte)0x7C,(byte)0x4B,(byte)0x1F,(byte)0xE6,
+                                              (byte)0x49,(byte)0x28,(byte)0x66,(byte)0x51,(byte)0xEC,(byte)0xE6,(byte)0x53,(byte)0x81,
+                                              (byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF
+                                          };
+
+    private DiffieHellmanMerkle diffieHellmanMerkle = new DiffieHellmanMerkle(new BigInteger(g), new BigInteger(p), null);
+
+    public byte[] getE()
+    {
+        return diffieHellmanMerkle.GetPublicKey().ToByteArray();
+    }
+}
+
+
+public class DiffieHellmanMerkle
+{
+    public BigInteger p { get; private set; }
+
+    private BigInteger x1 { get; set; }
+
+    public BigInteger g { get; private set; }
+
+    public DiffieHellmanMerkle(BigInteger g, BigInteger p, BigInteger? x, int secretLength = 0)
+    {
+        this.g = g;
+        this.p = p;
+        if (x == null)
+        {
+            if (secretLength == 0)
+            {
+                secretLength = p.BitLength();
+            }
+
+            do
+            {
+                x1 = GenerateRandom(secretLength);
+            }
+            while (x1 >= p - 1 || x1 == 0);
+        }
+        else
+        {
+            this.x1 = (BigInteger)x;
+        }
+    }
+
+    public BigInteger GenerateRandom(int length)
+    {
+        var random = new Random();
+        var data = new byte[length];
+        random.NextBytes(data);
+        return new BigInteger(data);
+    }
+
+    public BigInteger GetPublicKey()
+    {
+        return g.ModPow(x1, p);
+    }
+
+    public BigInteger GetSharedSecret(BigInteger x2)
+    {
+        return x2.ModPow(x1, p);
+    }
 }
