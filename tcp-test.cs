@@ -1,3 +1,4 @@
+using Org.Mentalis.Security.Cryptography;
 using System;
 using System.Collections;
 using System.Collections.Concurrent;
@@ -1166,9 +1167,11 @@ public static class Extensions
 
     public static void WriteLine(this NetworkStream stream, byte[] buffer)
     {
-        stream.Write(buffer, 0, buffer.Length);
+        var buffer2 = new byte[buffer.Length + 2];
+        Array.Copy(buffer, buffer2, buffer.Length);
         var bytes = Encoding.UTF8.GetBytes(Environment.NewLine);
-        stream.Write(bytes, 0, bytes.Length);
+        Array.Copy(bytes, 0, buffer2, buffer.Length, bytes.Length);
+        stream.Write(buffer2, 0, buffer2.Length);
     }
 
     public static void Read(this Stream stream, byte[] buffer)
@@ -2085,6 +2088,20 @@ public class Tclote
 {
     private Dictionary<string, string> config = new Dictionary<string, string>();
 
+    private Cipher encrypter, decrypter;
+
+    private int cipher_size = 8;
+
+    private byte[] IVc2s;
+    private byte[] IVs2c;
+    private byte[] Ec2s;
+    private byte[] Es2c;
+    private byte[] MACc2s;
+    private byte[] MACs2c;
+
+    private int seqi = 0;
+    private int seqo = 0;
+    
     public Tclote()
     {
         config.Add("kex_algorithms", "diffie-hellman-group1-sha1,diffie-hellman-group-exchange-sha1");
@@ -2133,10 +2150,10 @@ public class Tclote
 
         var tcpClient = new TcpClient();
         tcpClient.Connect(prefix, port);
-        FtpCommandProtocol(tcpClient);
+        FtpCommandProtocol(tcpClient, prefix);
     }
 
-    public void FtpCommandProtocol(TcpClient commandSocket)
+    public void FtpCommandProtocol(TcpClient commandSocket, string host)
     {
         using (commandSocket)
         {
@@ -2205,71 +2222,90 @@ public class Tclote
                             }
                         }
 
-                        int SSH_MSG_KEXDH_REPLY = 31;
                         count = networkStream.Read(buffer, 0, buffer.Length);
+                        var verified = false;
+                        var K_S = default(byte[]);
+                        var K = default(byte[]);
+                        var H = default(byte[]);
+                        var session_id = default(byte[]);
                         using (var memory = new MemoryStream(buffer, 0, count))
                         {
-                            memory.Seek(5, SeekOrigin.Begin);
-                            using (var reader = new BinaryReader(memory))
+                            verified = Verify(memory, diffieHellmanGroup1diff, V_C, V_S, I_C, I_S, e, ref K_S);
+                        }
+
+                        if (verified)
+                        {
+                            var SSH_MSG_NEWKEYS = 21;
+                            using (var memory = new MemoryStream())
                             {
-                                var type = (int)reader.ReadByte();
-                                if (type == SSH_MSG_KEXDH_REPLY)
+                                memory.Seek(5, SeekOrigin.Begin);
+                                using (var writer = new BinaryWriter(memory))
                                 {
-                                    /*
-                                    byte      SSH_MSG_KEXDH_REPLY
-                                    string    server public host key and certificates (K_S)
-                                    mpint     f
-                                    string    signature of H
-                                    */
-                                    var K_S = ReadBytes2(reader);
-                                    var f = GetMPInt(ReadBytes2(reader));
-                                    var k = GetMPInt(diffieHellmanGroup1diff.getK(f));
-                                    var sig_of_H = ReadBytes2(reader);
-
-                                    var b = Concatenation(V_C, V_S, I_C, I_S, K_S, e, f, k);
-
-                                    //The hash H is computed as the HASH hash of the concatenation of the following:
-                                    // string    V_C, the client's version string (CR and NL excluded)
-                                    // string    V_S, the server's version string (CR and NL excluded)
-                                    // string    I_C, the payload of the client's SSH_MSG_KEXINIT
-                                    // string    I_S, the payload of the server's SSH_MSG_KEXINIT
-                                    // string    K_S, the host key
-                                    // mpint     e, exchange value sent by the client
-                                    // mpint     f, exchange value sent by the server
-                                    // mpint     K, the shared secret
-                                    // This value is called the exchange hash.
-                                    var h = GetHASH(b);
-                                    using (var m = new MemoryStream(K_S))
-                                    {
-                                        using (var r = new BinaryReader(m))
-                                        {
-                                            var l = r.ReadInt32V2();
-                                            var t = Encoding.UTF8.GetString(r.ReadBytes(l));
-                                            if (string.Equals(t, "ssh-rsa"))
-                                            {
-                                                /*string    "ssh-rsa"
-                                                  mpint     e
-                                                  mpint     n*/
-                                                l = r.ReadInt32V2();
-                                                var ee = r.ReadBytes(l);
-                                                l = r.ReadInt32V2();
-                                                var n = r.ReadBytes(l);
-
-                                                /*
-                                                In that case, the
-                                                data is first hashed with HASH to compute H, and H is then hashed
-                                                with SHA-1 as part of the signing operation.
-                                                */
-                                                var hh = GetHASH(h);
-                                                var rsaKeyInfo = new RSAParameters { Modulus = StripLeadingZeros(n), Exponent = ee };
-                                                var result = Verify(sig_of_H, rsaKeyInfo, hh);
-                                            }
-                                        }
-                                    }
+                                    writer.Write((byte)SSH_MSG_NEWKEYS);
+                                    WrapPacket(memory, writer, (int)memory.Position - 5);
+                                    memory.WriteTo(networkStream);
                                 }
                             }
+
+                            if (ReceiveNewKeys(buffer, count))
+                            {
+
+                                if (session_id == null)
+                                {
+                                    session_id = new byte[H.Length];
+                                    Array.Copy(H, session_id, H.Length);
+                                }
+
+                                /*
+                                  Initial IV client to server:     HASH (K || H || "A" || session_id)
+                                  Initial IV server to client:     HASH (K || H || "B" || session_id)
+                                  Encryption key client to server: HASH (K || H || "C" || session_id)
+                                  Encryption key server to client: HASH (K || H || "D" || session_id)
+                                  Integrity key client to server:  HASH (K || H || "E" || session_id)
+                                  Integrity key server to client:  HASH (K || H || "F" || session_id)
+                                */
+                                IVc2s = Hash(K, H, new[] { (byte)0x41 }, session_id);
+                                IVs2c = Hash(K, H, new[] { (byte)0x42 }, session_id);
+                                Ec2s = Hash(K, H, new[] { (byte)0x43 }, session_id);
+                                Es2c = Hash(K, H, new[] { (byte)0x44 }, session_id);
+                                MACc2s = Hash(K, H, new[] { (byte)0x45 }, session_id);
+                                MACs2c = Hash(K, H, new[] { (byte)0x46 }, session_id);
+
+
+                                byte[] foo = Hash(K, H, Es2c);
+                                byte[] bar = new byte[Es2c.Length + foo.Length];
+                                Array.Copy(Es2c, 0, bar, 0, Es2c.Length);
+                                Array.Copy(foo, 0, bar, Es2c.Length, foo.Length);
+                                Es2c = bar;
+
+                                this.cipher_size = IVs2c.Length;
+                                this.decrypter = new Cipher(1, Es2c, IVs2c);
+
+                                foo = Hash(K, H, Ec2s);
+                                bar = new byte[Ec2s.Length + foo.Length];
+                                Array.Copy(Ec2s, 0, bar, 0, Ec2s.Length);
+                                Array.Copy(foo, 0, bar, Ec2s.Length, foo.Length);
+                                Ec2s = bar;
+                                this.encrypter = new Cipher(0, Ec2s, IVc2s);
+                                /*
+                                                               try
+                                                               {                                                                   
+                                                                   c = Class.forName(getConfig(guess[KeyExchange.PROPOSAL_MAC_ALGS_STOC]));
+                                                                   s2cmac = (MAC)(c.newInstance());
+                                                                   s2cmac.init(MACs2c);
+
+                                                                   c = Class.forName(getConfig(guess[KeyExchange.PROPOSAL_MAC_ALGS_CTOS]));
+                                                                   c2smac = (MAC)(c.newInstance());
+                                                                   c2smac.init(MACc2s);
+
+                                                                
+                                                               }
+                                                               catch (Exception e) { System.Console.Error.WriteLine("updatekeys: " + e); }*/
+                            }
+
+                            count = networkStream.Read(buffer, 0, buffer.Length);
                         }
-                        //count = networkStream.Read(buffer, 0, buffer.Length);
+
                         //command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
                         //Log($"{command}");
                         var i = 0;
@@ -2281,6 +2317,91 @@ public class Tclote
                 //Log(ex);
             }
         }
+    }
+
+    private bool ReceiveNewKeys(byte[] buffer, int count)
+    {
+        var newKeysReceived = false;
+        var SSH_MSG_NEWKEYS = 21;
+        using (var memory = new MemoryStream(buffer, 0, count))
+        {
+            using (var reader = new BinaryReader(memory))
+            {
+                var packetLength = reader.ReadInt32V2();
+                memory.Seek(packetLength + 4, SeekOrigin.Begin);
+                reader.ReadInt32V2();
+                reader.ReadByte();
+                newKeysReceived = SSH_MSG_NEWKEYS == (int)reader.ReadByte();
+            }
+        }
+
+        return newKeysReceived;
+    }
+
+    private bool Verify(MemoryStream memory, DiffieHellmanGroup1 diffieHellmanGroup1diff, byte[] V_C, byte[] V_S, byte[] I_C, byte[] I_S, byte[] e, ref byte[] K_S)
+    {
+        int SSH_MSG_KEXDH_REPLY = 31;
+        var result = false;
+        memory.Seek(5, SeekOrigin.Begin);
+        using (var reader = new BinaryReader(memory))
+        {
+            var type = (int)reader.ReadByte();
+            if (type == SSH_MSG_KEXDH_REPLY)
+            {
+                /*
+                byte      SSH_MSG_KEXDH_REPLY
+                string    server public host key and certificates (K_S)
+                mpint     f
+                string    signature of H
+                */
+                K_S = ReadBytes2(reader);
+                var f = GetMPInt(ReadBytes2(reader));
+                var k = GetMPInt(diffieHellmanGroup1diff.getK(f));
+                var sig_of_H = ReadBytes2(reader);
+
+                var b = Concatenation(V_C, V_S, I_C, I_S, K_S, e, f, k);
+
+                //The hash H is computed as the HASH hash of the concatenation of the following:
+                // string    V_C, the client's version string (CR and NL excluded)
+                // string    V_S, the server's version string (CR and NL excluded)
+                // string    I_C, the payload of the client's SSH_MSG_KEXINIT
+                // string    I_S, the payload of the server's SSH_MSG_KEXINIT
+                // string    K_S, the host key
+                // mpint     e, exchange value sent by the client
+                // mpint     f, exchange value sent by the server
+                // mpint     K, the shared secret
+                // This value is called the exchange hash.
+                var h = Hash(b);
+                using (var m = new MemoryStream(K_S))
+                {
+                    using (var r = new BinaryReader(m))
+                    {
+                        var l = r.ReadInt32V2();
+                        var t = Encoding.UTF8.GetString(r.ReadBytes(l));
+                        if (string.Equals(t, "ssh-rsa"))
+                        {
+                            /*string    "ssh-rsa"
+                              mpint     e
+                              mpint     n*/
+                            l = r.ReadInt32V2();
+                            var ee = r.ReadBytes(l);
+                            l = r.ReadInt32V2();
+                            var n = r.ReadBytes(l);
+
+                            /*
+                            In that case, the
+                            data is first hashed with HASH to compute H, and H is then hashed
+                            with SHA-1 as part of the signing operation.
+                            */
+                            var rsaKeyInfo = new RSAParameters { Modulus = StripLeadingZeros(n), Exponent = ee };
+                            result = verify(sig_of_H, rsaKeyInfo, h);
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
     }
 
     private byte[] Concatenation(byte[] V_C, byte[] V_S, byte[] I_C, byte[] I_S, byte[] K_S, byte[] e, byte[] f, byte[] k)
@@ -2353,50 +2474,75 @@ public class Tclote
         }
     }
 
-    public bool verify(byte[] rgbSignature, RSAParameters rsaKeyInfo, SHA1CryptoServiceProvider sha1)
+    public bool verify(byte[] rgbSignature, RSAParameters rsaKeyInfo, byte[] hash)
     {
-        using (var rsa = new RSACryptoServiceProvider())
+        using (var sha1 = new SHA1CryptoServiceProvider())
         {
-            rsa.ImportParameters(rsaKeyInfo);
-            var rsaDeformatter = new RSAPKCS1SignatureDeformatter(rsa);
-            rsaDeformatter.SetHashAlgorithm("SHA1");
-
-            long i = 0;
-            long j = 0;
-            byte[] tmp;
-
-            if (rgbSignature[0] == 0 && rgbSignature[1] == 0 && rgbSignature[2] == 0)
+            using (var cs = new CryptoStream(Stream.Null, sha1, CryptoStreamMode.Write))
             {
-                long i1 = (rgbSignature[i++] << 24) & 0xff000000;
-                long i2 = (rgbSignature[i++] << 16) & 0x00ff0000;
-                long i3 = (rgbSignature[i++] << 8) & 0x0000ff00;
-                long i4 = (rgbSignature[i++]) & 0x000000ff;
-                j = i1 | i2 | i3 | i4;
+                cs.Write(hash, 0, hash.Length);
+                cs.Close();
+                using (var rsa = new RSACryptoServiceProvider())
+                {
+                    rsa.ImportParameters(rsaKeyInfo);
+                    var rsaDeformatter = new RSAPKCS1SignatureDeformatter(rsa);
+                    rsaDeformatter.SetHashAlgorithm("SHA1");
 
-                i += j;
+                    long i = 0;
+                    long j = 0;
+                    byte[] tmp;
 
-                i1 = (rgbSignature[i++] << 24) & 0xff000000;
-                i2 = (rgbSignature[i++] << 16) & 0x00ff0000;
-                i3 = (rgbSignature[i++] << 8) & 0x0000ff00;
-                i4 = (rgbSignature[i++]) & 0x000000ff;
-                j = i1 | i2 | i3 | i4;
+                    if (rgbSignature[0] == 0 && rgbSignature[1] == 0 && rgbSignature[2] == 0)
+                    {
+                        long i1 = (rgbSignature[i++] << 24) & 0xff000000;
+                        long i2 = (rgbSignature[i++] << 16) & 0x00ff0000;
+                        long i3 = (rgbSignature[i++] << 8) & 0x0000ff00;
+                        long i4 = (rgbSignature[i++]) & 0x000000ff;
+                        j = i1 | i2 | i3 | i4;
 
-                tmp = new byte[j];
-                Array.Copy(rgbSignature, i, tmp, 0, j);
-                rgbSignature = tmp;
+                        i += j;
+
+                        i1 = (rgbSignature[i++] << 24) & 0xff000000;
+                        i2 = (rgbSignature[i++] << 16) & 0x00ff0000;
+                        i3 = (rgbSignature[i++] << 8) & 0x0000ff00;
+                        i4 = (rgbSignature[i++]) & 0x000000ff;
+                        j = i1 | i2 | i3 | i4;
+
+                        tmp = new byte[j];
+                        Array.Copy(rgbSignature, i, tmp, 0, j);
+                        rgbSignature = tmp;
+                    }
+
+                    return rsaDeformatter.VerifySignature(sha1, rgbSignature);
+                }
             }
-
-            return rsaDeformatter.VerifySignature(sha1, rgbSignature);
         }
     }
 
-    private byte[] GetHASH(byte[] bytes)
+    private SHA1CryptoServiceProvider GetSHA1CryptoServiceProvider(byte[] bytes)
     {
         using (var md = new SHA1CryptoServiceProvider())
         {
             using (var cs = new CryptoStream(Stream.Null, md, CryptoStreamMode.Write))
             {
                 cs.Write(bytes, 0, bytes.Length);
+                cs.Close();
+                return md;
+            }
+        }
+    }
+
+    private byte[] Hash(params byte[][] bytes)
+    {
+        using (var md = new SHA1CryptoServiceProvider())
+        {
+            using (var cs = new CryptoStream(Stream.Null, md, CryptoStreamMode.Write))
+            {
+                foreach (var b in bytes)
+                {
+                    cs.Write(b, 0, b.Length);
+                }
+
                 cs.Close();
                 return md.Hash;
             }
@@ -2459,20 +2605,24 @@ public class Tclote
         return result;
     }
 
+    /*
+         Arbitrary-length padding, such that the total length of
+         (packet_length || padding_length || payload || random padding)
+         is a multiple of the cipher block size or 8, whichever is
+         larger.  There MUST be at least four bytes of padding.  The
+         padding SHOULD consist of random bytes.  The maximum amount of
+         padding is 255 bytes.
+         */
     private void WrapPacket(MemoryStream memory, BinaryWriter writer, int payload_length)
     {
-        var padding_length = 0;
-        //var payload_length = (int)memory.Position - 5;
-        if (payload_length % 8 != 0)
-        {
-            padding_length = 16 - (int)payload_length % 8;
-        }
+        var length = payload_length + 4 + 1;
+        var padding_length = 16 - (int)length % 8;
 
         memory.Seek(4, SeekOrigin.Begin);
         writer.Write((byte)padding_length);
         if (padding_length > 0)
         {
-            memory.Seek(0, SeekOrigin.End);
+            memory.Seek(5 + payload_length, SeekOrigin.Begin);
             var random = new Random();
             var padding = new Byte[padding_length];
             random.NextBytes(padding);
@@ -2671,7 +2821,6 @@ public class DiffieHellmanGroup1
     }
 }
 
-
 public class DiffieHellmanMerkle
 {
     private DiffieHellman diffieHellman;
@@ -2689,5 +2838,27 @@ public class DiffieHellmanMerkle
     public byte[] GetSharedSecret(byte[] x2)
     {
         return diffieHellman.DecryptKeyExchange(x2);
+    }
+}
+
+public class Cipher
+{
+    public int IVSize { get; private set; } = 8;
+
+    public int BlockSize { get; private set; } = 24;
+
+    private TripleDESCryptoServiceProvider triDes = new TripleDESCryptoServiceProvider();
+    private ICryptoTransform cipher;
+
+    public Cipher(int mode, byte[] key, byte[] iv)
+    {
+        triDes.Mode = CipherMode.CBC;
+        triDes.Padding = PaddingMode.None;
+        cipher = mode == 0 ? triDes.CreateEncryptor(key, iv) : triDes.CreateDecryptor(key, iv);
+    }
+
+    public void Transform(byte[] foo, int s1, int len, byte[] bar, int s2)
+    {
+        cipher.TransformBlock(foo, s1, len, bar, s2);
     }
 }
