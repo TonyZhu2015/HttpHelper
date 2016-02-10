@@ -1,5 +1,4 @@
-using Org.Mentalis.Security.Cryptography;
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -842,7 +841,6 @@ public static class Extensions
         }
     }
 
-
     public static byte[] XOR(this byte[] arr1, byte[] arr2)
     {
         if (arr1.Length != arr2.Length)
@@ -1174,9 +1172,9 @@ public static class Extensions
         stream.Write(buffer2, 0, buffer2.Length);
     }
 
-    public static void Read(this Stream stream, byte[] buffer)
+    public static int Read(this Stream stream, byte[] buffer)
     {
-        stream.Read(buffer, 0, buffer.Length);
+        return stream.Read(buffer, 0, buffer.Length);
     }
 
     public static void Log(string message)
@@ -2000,6 +1998,66 @@ public static class Extensions
         Uri folderUri = new Uri(folder);
         return Uri.UnescapeDataString(folderUri.MakeRelativeUri(pathUri).ToString().Replace('/', Path.DirectorySeparatorChar));
     }
+
+    public static byte[] Copy(this byte[] source)
+    {
+        var result = new byte[source.Length];
+        Array.Copy(source, result, source.Length);
+        return result;
+    }
+
+    public static byte[] Copy(this byte[] source, int index, int count)
+    {
+        var result = new byte[count];
+        Array.Copy(source, index, result, 0, count);
+        return result;
+    }
+
+    public static byte[] Copy(this byte[] source, int count)
+    {
+        var result = new byte[count];
+        Array.Copy(source, result, count);
+        return result;
+    }
+
+    public static string ToString(this byte[] buffer, int count)
+    {
+        return Encoding.UTF8.GetString(buffer, 0, count);
+    }
+
+    public static byte[] ToBytes(this string message)
+    {
+        return Encoding.UTF8.GetBytes(message);
+    }
+
+    public static byte[] StripLeadingZeros(this byte[] buffer)
+    {
+        var lastZero = -1;
+        for (int i = 0; i < buffer.Length; i++)
+        {
+            if (buffer[i] == 0)
+            {
+                lastZero = i;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        lastZero++;
+        var result = new byte[buffer.Length - lastZero];
+        Array.Copy(buffer, lastZero, result, 0, result.Length);
+        return result;
+    }
+
+    public static byte[] RandomBytes(this int count)
+    {
+        var buffer = new Byte[count];
+        var random = new Random();
+        random.NextBytes(buffer);
+        return buffer;
+    }
 }
 
 public class Sulfate
@@ -2090,7 +2148,7 @@ public class Tclote
 
     private Cipher encrypter, decrypter;
 
-    private int cipher_size = 8;
+    private int cipherSize = 8;
 
     private byte[] IVc2s;
     private byte[] IVs2c;
@@ -2098,10 +2156,18 @@ public class Tclote
     private byte[] Es2c;
     private byte[] MACc2s;
     private byte[] MACs2c;
+    private byte[] V_S;
+    private byte[] V_C;
+    private byte[] I_S;
+    private byte[] I_C;
+    private byte[] K_S;
+    private byte[] K;
+    private byte[] H;
+    private byte[] sessionID;
 
     private int seqi = 0;
     private int seqo = 0;
-    
+
     public Tclote()
     {
         config.Add("kex_algorithms", "diffie-hellman-group1-sha1,diffie-hellman-group-exchange-sha1");
@@ -2131,7 +2197,6 @@ public class Tclote
         config.Add("keypairgen.rsa", "Tamir.SharpSsh.jsch.jce.KeyPairGenRSA");
         config.Add("random", "Tamir.SharpSsh.jsch.jce.Random");
         config.Add("aes128-cbc", "Tamir.SharpSsh.jsch.jce.AES128CBC");
-        config.Add("StrictHostKeyChecking", "ask");
     }
 
     public void Connect(string prefix)
@@ -2164,20 +2229,18 @@ public class Tclote
                     var buffer = new byte[5000];
                     File.AppendAllText($@"{AppDomain.CurrentDomain.BaseDirectory}\log.txt", string.Empty);
                     var count = 0;
-                    count = networkStream.Read(buffer, 0, buffer.Length);
+                    count = networkStream.Read(buffer);
                     if (count > 0)
                     {
-                        var command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
-                        var V_S = new byte[count - 2];
-                        Array.Copy(buffer, V_S, count - 2);
-                        var V_C = Encoding.UTF8.GetBytes("SSH-2.0-SharpSSH-1.1.1.14-JSCH-0.1.28");
+                        var command = buffer.ToString(count).Trim(Environment.NewLine);
+                        V_S = buffer.Copy(count - 2);
+                        V_C = "SSH-2.0-SharpSSH-1.1.1.14-JSCH-0.1.28".ToBytes();
                         networkStream.WriteLine(V_C);
-                        count = networkStream.Read(buffer, 0, buffer.Length);
+                        count = networkStream.Read(buffer);
                         var server_SSH_MSG_KEXINIT = default(SSH_MSG_KEXINIT);
                         var paddingLength = (int)buffer[4];
                         var payloadLength = count - paddingLength - 5;
-                        var I_S = new byte[payloadLength];
-                        Array.Copy(buffer, 5, I_S, 0, payloadLength);
+                        I_S = buffer.Copy(5, payloadLength);
                         using (var memory = new MemoryStream(buffer, 0, count))
                         {
                             using (var reader = new BinaryReader(memory))
@@ -2194,67 +2257,30 @@ public class Tclote
                         byte[n2]  random padding; n2 = padding_length
                         byte[m]   mac (Message Authentication Code - MAC); m = mac_length
                         */
-                        var I_C = GetPayload();
-                        using (var memory = new MemoryStream())
-                        {
-                            memory.Seek(5, SeekOrigin.Begin);
-                            using (var writer = new BinaryWriter(memory))
-                            {
-                                writer.Write(I_C);
-                                WrapPacket(memory, writer, I_C.Length);
-                                memory.WriteTo(networkStream);
-                            }
-                        }
+                        I_C = GetSSH_MSG_KEXINIT();
+                        SendPayload(networkStream, I_C);
 
                         var diffieHellmanGroup1diff = new DiffieHellmanGroup1();
                         var guess_SSH_MSG_KEXINIT = Guess_SSH_MSG_KEXINIT(server_SSH_MSG_KEXINIT, local_SSH_MSG_KEXINIT);
                         var e = GetMPInt(diffieHellmanGroup1diff.getE());
-                        using (var memory = new MemoryStream())
-                        {
-                            using (var writer = new BinaryWriter(memory, Encoding.UTF8))
-                            {
-                                memory.Seek(5, SeekOrigin.Begin);
-                                int SSH_MSG_KEXDH_INIT = 30;
-                                writer.Write((byte)SSH_MSG_KEXDH_INIT);
-                                WriteMPInt(writer, e);
-                                WrapPacket(memory, writer, (int)memory.Position - 5);
-                                memory.WriteTo(networkStream);
-                            }
-                        }
+                        int SSH_MSG_KEXDH_INIT = 30;
+                        SendPayload(networkStream, new[] { (byte)SSH_MSG_KEXDH_INIT }, e);
 
-                        count = networkStream.Read(buffer, 0, buffer.Length);
+                        count = networkStream.Read(buffer);
                         var verified = false;
-                        var K_S = default(byte[]);
-                        var K = default(byte[]);
-                        var H = default(byte[]);
-                        var session_id = default(byte[]);
                         using (var memory = new MemoryStream(buffer, 0, count))
                         {
-                            verified = Verify(memory, diffieHellmanGroup1diff, V_C, V_S, I_C, I_S, e, ref K_S);
+                            verified = Verify(memory, diffieHellmanGroup1diff, e);
                         }
 
                         if (verified)
                         {
                             var SSH_MSG_NEWKEYS = 21;
-                            using (var memory = new MemoryStream())
-                            {
-                                memory.Seek(5, SeekOrigin.Begin);
-                                using (var writer = new BinaryWriter(memory))
-                                {
-                                    writer.Write((byte)SSH_MSG_NEWKEYS);
-                                    WrapPacket(memory, writer, (int)memory.Position - 5);
-                                    memory.WriteTo(networkStream);
-                                }
-                            }
+                            SendPayload(networkStream, new[] { (byte)SSH_MSG_NEWKEYS });
 
                             if (ReceiveNewKeys(buffer, count))
                             {
-
-                                if (session_id == null)
-                                {
-                                    session_id = new byte[H.Length];
-                                    Array.Copy(H, session_id, H.Length);
-                                }
+                                sessionID = H.Copy();
 
                                 /*
                                   Initial IV client to server:     HASH (K || H || "A" || session_id)
@@ -2264,46 +2290,48 @@ public class Tclote
                                   Integrity key client to server:  HASH (K || H || "E" || session_id)
                                   Integrity key server to client:  HASH (K || H || "F" || session_id)
                                 */
-                                IVc2s = Hash(K, H, new[] { (byte)0x41 }, session_id);
-                                IVs2c = Hash(K, H, new[] { (byte)0x42 }, session_id);
-                                Ec2s = Hash(K, H, new[] { (byte)0x43 }, session_id);
-                                Es2c = Hash(K, H, new[] { (byte)0x44 }, session_id);
-                                MACc2s = Hash(K, H, new[] { (byte)0x45 }, session_id);
-                                MACs2c = Hash(K, H, new[] { (byte)0x46 }, session_id);
+                                IVc2s = Hash(K, H, new[] { (byte)0x41 }, sessionID);
+                                IVs2c = Hash(K, H, new[] { (byte)0x42 }, sessionID);
+                                Ec2s = Hash(K, H, new[] { (byte)0x43 }, sessionID);
+                                Ec2s = Concatenation(Ec2s, Hash(K, H, Ec2s));
+                                Es2c = Hash(K, H, new[] { (byte)0x44 }, sessionID);
+                                Es2c = Concatenation(Es2c, Hash(K, H, Es2c));
+                                MACc2s = Hash(K, H, new[] { (byte)0x45 }, sessionID);
+                                MACs2c = Hash(K, H, new[] { (byte)0x46 }, sessionID);
 
-
-                                byte[] foo = Hash(K, H, Es2c);
-                                byte[] bar = new byte[Es2c.Length + foo.Length];
+                                /*var foo = Hash(K, H, Es2c);
+                                var bar = new byte[Es2c.Length + foo.Length];
                                 Array.Copy(Es2c, 0, bar, 0, Es2c.Length);
                                 Array.Copy(foo, 0, bar, Es2c.Length, foo.Length);
-                                Es2c = bar;
+                                Es2c = bar;*/
 
-                                this.cipher_size = IVs2c.Length;
-                                this.decrypter = new Cipher(1, Es2c, IVs2c);
+                                this.cipherSize = IVs2c.Length;
 
-                                foo = Hash(K, H, Ec2s);
+                                /*foo = Hash(K, H, Ec2s);
                                 bar = new byte[Ec2s.Length + foo.Length];
                                 Array.Copy(Ec2s, 0, bar, 0, Ec2s.Length);
                                 Array.Copy(foo, 0, bar, Ec2s.Length, foo.Length);
-                                Ec2s = bar;
+                                Ec2s = bar;*/
+
+                                this.decrypter = new Cipher(1, Es2c, IVs2c);
                                 this.encrypter = new Cipher(0, Ec2s, IVc2s);
                                 /*
-                                                               try
-                                                               {                                                                   
-                                                                   c = Class.forName(getConfig(guess[KeyExchange.PROPOSAL_MAC_ALGS_STOC]));
-                                                                   s2cmac = (MAC)(c.newInstance());
-                                                                   s2cmac.init(MACs2c);
+                                  try
+                                  {                                                                   
+                                      c = Class.forName(getConfig(guess[KeyExchange.PROPOSAL_MAC_ALGS_STOC]));
+                                      s2cmac = (MAC)(c.newInstance());
+                                      s2cmac.init(MACs2c);
 
-                                                                   c = Class.forName(getConfig(guess[KeyExchange.PROPOSAL_MAC_ALGS_CTOS]));
-                                                                   c2smac = (MAC)(c.newInstance());
-                                                                   c2smac.init(MACc2s);
+                                      c = Class.forName(getConfig(guess[KeyExchange.PROPOSAL_MAC_ALGS_CTOS]));
+                                      c2smac = (MAC)(c.newInstance());
+                                      c2smac.init(MACc2s);
 
-                                                                
-                                                               }
-                                                               catch (Exception e) { System.Console.Error.WriteLine("updatekeys: " + e); }*/
+                                   
+                                  }
+                                  catch (Exception e) { System.Console.Error.WriteLine("updatekeys: " + e); }*/
                             }
 
-                            count = networkStream.Read(buffer, 0, buffer.Length);
+                            count = networkStream.Read(buffer);
                         }
 
                         //command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
@@ -2315,6 +2343,21 @@ public class Tclote
             catch (Exception ex)
             {
                 //Log(ex);
+            }
+        }
+    }
+
+    private void SendPayload(NetworkStream stream, params byte[][] buffers)
+    {
+        using (var memory = new MemoryStream())
+        {
+            memory.Seek(5, SeekOrigin.Begin);
+            using (var writer = new BinaryWriter(memory))
+            {
+                var length = buffers.Sum(l => l.Length);
+                buffers.ForEach(p => writer.Write(p));
+                WrapPacket(memory, writer, length);
+                memory.WriteTo(stream);
             }
         }
     }
@@ -2338,7 +2381,7 @@ public class Tclote
         return newKeysReceived;
     }
 
-    private bool Verify(MemoryStream memory, DiffieHellmanGroup1 diffieHellmanGroup1diff, byte[] V_C, byte[] V_S, byte[] I_C, byte[] I_S, byte[] e, ref byte[] K_S)
+    private bool Verify(MemoryStream memory, DiffieHellmanGroup1 diffieHellmanGroup1diff, byte[] e)
     {
         int SSH_MSG_KEXDH_REPLY = 31;
         var result = false;
@@ -2356,10 +2399,10 @@ public class Tclote
                 */
                 K_S = ReadBytes2(reader);
                 var f = GetMPInt(ReadBytes2(reader));
-                var k = GetMPInt(diffieHellmanGroup1diff.getK(f));
-                var sig_of_H = ReadBytes2(reader);
+                K = GetMPInt(diffieHellmanGroup1diff.getK(f));
+                var signature = ReadBytes2(reader);
 
-                var b = Concatenation(V_C, V_S, I_C, I_S, K_S, e, f, k);
+                var blob = Concatenation(V_C, V_S, I_C, I_S, K_S, e, f, K);
 
                 //The hash H is computed as the HASH hash of the concatenation of the following:
                 // string    V_C, the client's version string (CR and NL excluded)
@@ -2371,30 +2414,27 @@ public class Tclote
                 // mpint     f, exchange value sent by the server
                 // mpint     K, the shared secret
                 // This value is called the exchange hash.
-                var h = Hash(b);
+                H = Hash(blob);
                 using (var m = new MemoryStream(K_S))
                 {
                     using (var r = new BinaryReader(m))
                     {
-                        var l = r.ReadInt32V2();
-                        var t = Encoding.UTF8.GetString(r.ReadBytes(l));
+                        var t = Encoding.UTF8.GetString(ReadBytes2(r));
                         if (string.Equals(t, "ssh-rsa"))
                         {
                             /*string    "ssh-rsa"
                               mpint     e
                               mpint     n*/
-                            l = r.ReadInt32V2();
-                            var ee = r.ReadBytes(l);
-                            l = r.ReadInt32V2();
-                            var n = r.ReadBytes(l);
+                            var exponent = ReadBytes2(r);
+                            var modulus = ReadBytes2(r).StripLeadingZeros();
 
                             /*
                             In that case, the
                             data is first hashed with HASH to compute H, and H is then hashed
                             with SHA-1 as part of the signing operation.
                             */
-                            var rsaKeyInfo = new RSAParameters { Modulus = StripLeadingZeros(n), Exponent = ee };
-                            result = verify(sig_of_H, rsaKeyInfo, h);
+                            var rsaParameters = new RSAParameters { Modulus = modulus, Exponent = exponent };
+                            result = Verify(signature, rsaParameters, H);
                         }
                     }
                 }
@@ -2404,26 +2444,23 @@ public class Tclote
         return result;
     }
 
-    private byte[] Concatenation(byte[] V_C, byte[] V_S, byte[] I_C, byte[] I_S, byte[] K_S, byte[] e, byte[] f, byte[] k)
+    private byte[] Concatenation(params byte[][] buffers)
     {
-        using (var memory2 = new MemoryStream())
+        using (var memory = new MemoryStream())
         {
-            using (var writer = new BinaryWriter(memory2))
+            using (var writer = new BinaryWriter(memory))
             {
-                WriteBytes(writer, V_C);
-                WriteBytes(writer, V_S);
-                WriteBytes(writer, I_C);
-                WriteBytes(writer, I_S);
-                WriteBytes(writer, K_S);
-                WriteBytes(writer, e);
-                WriteBytes(writer, f);
-                WriteBytes(writer, k);
-                return memory2.ToArray();
+                foreach (var buffer in buffers)
+                {
+                    WriteBytes(writer, buffer);
+                }
+
+                return memory.ToArray();
             }
         }
     }
 
-    private byte[] GetPayload()
+    private byte[] GetSSH_MSG_KEXINIT()
     {
         using (var memory = new MemoryStream())
         {
@@ -2431,40 +2468,27 @@ public class Tclote
             {
                 var SSH_MSG_KEXINIT = 20;
                 writer.Write((byte)SSH_MSG_KEXINIT);
-                var random = new Random();
-                var cookie = new Byte[16];
-                random.NextBytes(cookie);
-                writer.Write(cookie);
+                writer.Write(16.RandomBytes());
                 var kex_algorithms = Encoding.UTF8.GetBytes(config["kex_algorithms"]);
-                writer.WriteInt32(kex_algorithms.Length);
-                writer.Write(kex_algorithms);
+                WriteBytes(writer, kex_algorithms);
                 var server_host_key_algorithms = Encoding.UTF8.GetBytes(config["server_host_key_algorithms"]);
-                writer.WriteInt32(server_host_key_algorithms.Length);
-                writer.Write(server_host_key_algorithms);
+                WriteBytes(writer, server_host_key_algorithms);
                 var encryption_algorithms_client_to_server = Encoding.UTF8.GetBytes(config["encryption_algorithms_client_to_server"]);
-                writer.WriteInt32(encryption_algorithms_client_to_server.Length);
-                writer.Write(encryption_algorithms_client_to_server);
+                WriteBytes(writer, encryption_algorithms_client_to_server);
                 var encryption_algorithms_server_to_client = Encoding.UTF8.GetBytes(config["encryption_algorithms_server_to_client"]);
-                writer.WriteInt32(encryption_algorithms_server_to_client.Length);
-                writer.Write(encryption_algorithms_server_to_client);
+                WriteBytes(writer, encryption_algorithms_server_to_client);
                 var mac_algorithms_client_to_server = Encoding.UTF8.GetBytes(config["mac_algorithms_client_to_server"]);
-                writer.WriteInt32(mac_algorithms_client_to_server.Length);
-                writer.Write(mac_algorithms_client_to_server);
+                WriteBytes(writer, mac_algorithms_client_to_server);
                 var mac_algorithms_server_to_client = Encoding.UTF8.GetBytes(config["mac_algorithms_server_to_client"]);
-                writer.WriteInt32(mac_algorithms_server_to_client.Length);
-                writer.Write(mac_algorithms_server_to_client);
+                WriteBytes(writer, mac_algorithms_server_to_client);
                 var compression_algorithms_client_to_server = Encoding.UTF8.GetBytes(config["compression_algorithms_client_to_server"]);
-                writer.WriteInt32(compression_algorithms_client_to_server.Length);
-                writer.Write(compression_algorithms_client_to_server);
+                WriteBytes(writer, compression_algorithms_client_to_server);
                 var compression_algorithms_server_to_client = Encoding.UTF8.GetBytes(config["compression_algorithms_server_to_client"]);
-                writer.WriteInt32(compression_algorithms_server_to_client.Length);
-                writer.Write(compression_algorithms_server_to_client);
+                WriteBytes(writer, compression_algorithms_server_to_client);
                 var languages_client_to_server = Encoding.UTF8.GetBytes(config["languages_client_to_server"]);
-                writer.WriteInt32(languages_client_to_server.Length);
-                writer.Write(languages_client_to_server);
+                WriteBytes(writer, languages_client_to_server);
                 var languages_server_to_client = Encoding.UTF8.GetBytes(config["languages_server_to_client"]);
-                writer.WriteInt32(languages_server_to_client.Length);
-                writer.Write(languages_server_to_client);
+                WriteBytes(writer, languages_server_to_client);
                 var first_kex_packet_follows = false;
                 writer.Write(first_kex_packet_follows);
                 var reserved_for_future_extension = 0;
@@ -2474,7 +2498,7 @@ public class Tclote
         }
     }
 
-    public bool verify(byte[] rgbSignature, RSAParameters rsaKeyInfo, byte[] hash)
+    public bool Verify(byte[] signature, RSAParameters rsaKeyInfo, byte[] hash)
     {
         using (var sha1 = new SHA1CryptoServiceProvider())
         {
@@ -2492,42 +2516,29 @@ public class Tclote
                     long j = 0;
                     byte[] tmp;
 
-                    if (rgbSignature[0] == 0 && rgbSignature[1] == 0 && rgbSignature[2] == 0)
+                    if (signature[0] == 0 && signature[1] == 0 && signature[2] == 0)
                     {
-                        long i1 = (rgbSignature[i++] << 24) & 0xff000000;
-                        long i2 = (rgbSignature[i++] << 16) & 0x00ff0000;
-                        long i3 = (rgbSignature[i++] << 8) & 0x0000ff00;
-                        long i4 = (rgbSignature[i++]) & 0x000000ff;
+                        long i1 = (signature[i++] << 24) & 0xff000000;
+                        long i2 = (signature[i++] << 16) & 0x00ff0000;
+                        long i3 = (signature[i++] << 8) & 0x0000ff00;
+                        long i4 = (signature[i++]) & 0x000000ff;
                         j = i1 | i2 | i3 | i4;
 
                         i += j;
 
-                        i1 = (rgbSignature[i++] << 24) & 0xff000000;
-                        i2 = (rgbSignature[i++] << 16) & 0x00ff0000;
-                        i3 = (rgbSignature[i++] << 8) & 0x0000ff00;
-                        i4 = (rgbSignature[i++]) & 0x000000ff;
+                        i1 = (signature[i++] << 24) & 0xff000000;
+                        i2 = (signature[i++] << 16) & 0x00ff0000;
+                        i3 = (signature[i++] << 8) & 0x0000ff00;
+                        i4 = (signature[i++]) & 0x000000ff;
                         j = i1 | i2 | i3 | i4;
 
                         tmp = new byte[j];
-                        Array.Copy(rgbSignature, i, tmp, 0, j);
-                        rgbSignature = tmp;
+                        Array.Copy(signature, i, tmp, 0, j);
+                        signature = tmp;
                     }
 
-                    return rsaDeformatter.VerifySignature(sha1, rgbSignature);
+                    return rsaDeformatter.VerifySignature(sha1, signature);
                 }
-            }
-        }
-    }
-
-    private SHA1CryptoServiceProvider GetSHA1CryptoServiceProvider(byte[] bytes)
-    {
-        using (var md = new SHA1CryptoServiceProvider())
-        {
-            using (var cs = new CryptoStream(Stream.Null, md, CryptoStreamMode.Write))
-            {
-                cs.Write(bytes, 0, bytes.Length);
-                cs.Close();
-                return md;
             }
         }
     }
@@ -2536,73 +2547,17 @@ public class Tclote
     {
         using (var md = new SHA1CryptoServiceProvider())
         {
-            using (var cs = new CryptoStream(Stream.Null, md, CryptoStreamMode.Write))
+            using (var stream = new CryptoStream(Stream.Null, md, CryptoStreamMode.Write))
             {
                 foreach (var b in bytes)
                 {
-                    cs.Write(b, 0, b.Length);
+                    stream.Write(b, 0, b.Length);
                 }
 
-                cs.Close();
+                stream.Close();
                 return md.Hash;
             }
         }
-    }
-
-    public bool Verify(byte[] rgbSignature, RSAParameters rsaKeyInfo, byte[] h)
-    {
-        using (var rsa = new RSACryptoServiceProvider())
-        {
-            var rsaDeformatter = new RSAPKCS1SignatureDeformatter(rsa);
-            rsaDeformatter.SetHashAlgorithm("SHA1");
-
-            long i = 0;
-            long j = 0;
-            byte[] tmp;
-
-            if (rgbSignature[0] == 0 && rgbSignature[1] == 0 && rgbSignature[2] == 0)
-            {
-                long i1 = (rgbSignature[i++] << 24) & 0xff000000;
-                long i2 = (rgbSignature[i++] << 16) & 0x00ff0000;
-                long i3 = (rgbSignature[i++] << 8) & 0x0000ff00;
-                long i4 = (rgbSignature[i++]) & 0x000000ff;
-                j = i1 | i2 | i3 | i4;
-
-                i += j;
-
-                i1 = (rgbSignature[i++] << 24) & 0xff000000;
-                i2 = (rgbSignature[i++] << 16) & 0x00ff0000;
-                i3 = (rgbSignature[i++] << 8) & 0x0000ff00;
-                i4 = (rgbSignature[i++]) & 0x000000ff;
-                j = i1 | i2 | i3 | i4;
-
-                tmp = new byte[j];
-                Array.Copy(rgbSignature, i, tmp, 0, j);
-                rgbSignature = tmp;
-            }
-
-            return rsaDeformatter.VerifySignature(h, rgbSignature);
-        }
-    }
-
-    public byte[] StripLeadingZeros(byte[] a)
-    {
-        int lastZero = -1;
-        for (int i = 0; i < a.Length; i++)
-        {
-            if (a[i] == 0)
-            {
-                lastZero = i;
-            }
-            else
-            {
-                break;
-            }
-        }
-        lastZero++;
-        byte[] result = new byte[a.Length - lastZero];
-        Array.Copy(a, lastZero, result, 0, result.Length);
-        return result;
     }
 
     /*
@@ -2613,45 +2568,25 @@ public class Tclote
          padding SHOULD consist of random bytes.  The maximum amount of
          padding is 255 bytes.
          */
-    private void WrapPacket(MemoryStream memory, BinaryWriter writer, int payload_length)
+    private void WrapPacket(MemoryStream memory, BinaryWriter writer, int payloadLength)
     {
-        var length = payload_length + 4 + 1;
-        var padding_length = 16 - (int)length % 8;
+        var length = payloadLength + 4 + 1;
+        var paddingLength = cipherSize * 2 - (int)length % cipherSize;
 
         memory.Seek(4, SeekOrigin.Begin);
-        writer.Write((byte)padding_length);
-        if (padding_length > 0)
+        writer.Write((byte)paddingLength);
+        if (paddingLength > 0)
         {
-            memory.Seek(5 + payload_length, SeekOrigin.Begin);
-            var random = new Random();
-            var padding = new Byte[padding_length];
-            random.NextBytes(padding);
-            writer.Write(padding);
+            memory.Seek(5 + payloadLength, SeekOrigin.Begin);
+            writer.Write(paddingLength.RandomBytes());
         }
 
-        var packet_length = payload_length + padding_length + 1;
+        var packetLength = payloadLength + paddingLength + 1;
         memory.Seek(0, SeekOrigin.Begin);
-        writer.WriteInt32(packet_length);
+        writer.WriteInt32(packetLength);
     }
 
     /*The mpint encoding requires a leading zero bit*/
-    public void WriteMPInt(BinaryWriter writer, byte[] bytes)
-    {
-        int length = bytes.Length;
-        if ((bytes[0] & 0x80) != 0)
-        {
-            length++;
-            writer.WriteInt32(length);
-            writer.Write((byte)0);
-        }
-        else
-        {
-            writer.WriteInt32(length);
-        }
-
-        writer.Write(bytes);
-    }
-
     public byte[] GetMPInt(byte[] bytes)
     {
         var result = default(byte[]);
@@ -2684,14 +2619,14 @@ public class Tclote
     private SSH_MSG_KEXINIT Guess_SSH_MSG_KEXINIT(SSH_MSG_KEXINIT server, SSH_MSG_KEXINIT local)
     {
         var result = new SSH_MSG_KEXINIT();
-        result.kex_algorithms = Match_SSH_MSG_KEXINIT(local.kex_algorithms, server.kex_algorithms);
-        result.server_host_key_algorithms = Match_SSH_MSG_KEXINIT(local.server_host_key_algorithms, server.server_host_key_algorithms);
-        result.encryption_algorithms_client_to_server = Match_SSH_MSG_KEXINIT(local.encryption_algorithms_client_to_server, server.encryption_algorithms_client_to_server);
-        result.encryption_algorithms_server_to_client = Match_SSH_MSG_KEXINIT(local.encryption_algorithms_server_to_client, server.encryption_algorithms_server_to_client);
-        result.compression_algorithms_client_to_server = Match_SSH_MSG_KEXINIT(local.compression_algorithms_client_to_server, server.compression_algorithms_client_to_server);
-        result.compression_algorithms_server_to_client = Match_SSH_MSG_KEXINIT(local.compression_algorithms_server_to_client, server.compression_algorithms_server_to_client);
-        result.mac_algorithms_client_to_server = Match_SSH_MSG_KEXINIT(local.mac_algorithms_client_to_server, server.mac_algorithms_client_to_server);
-        result.mac_algorithms_server_to_client = Match_SSH_MSG_KEXINIT(local.mac_algorithms_server_to_client, server.mac_algorithms_server_to_client);
+        result.KEXAlgorithms = Match_SSH_MSG_KEXINIT(local.KEXAlgorithms, server.KEXAlgorithms);
+        result.ServerHostKeyAlgorithms = Match_SSH_MSG_KEXINIT(local.ServerHostKeyAlgorithms, server.ServerHostKeyAlgorithms);
+        result.EncryptionAlgorithmsClientToServer = Match_SSH_MSG_KEXINIT(local.EncryptionAlgorithmsClientToServer, server.EncryptionAlgorithmsClientToServer);
+        result.EncryptionAlgorithmsServerToClient = Match_SSH_MSG_KEXINIT(local.EncryptionAlgorithmsServerToClient, server.EncryptionAlgorithmsServerToClient);
+        result.CompressionAlgorithmsClientToServer = Match_SSH_MSG_KEXINIT(local.CompressionAlgorithmsClientToServer, server.CompressionAlgorithmsClientToServer);
+        result.CompressionAlgorithmsServerToClient = Match_SSH_MSG_KEXINIT(local.CompressionAlgorithmsServerToClient, server.CompressionAlgorithmsServerToClient);
+        result.MACAlgorithmsClientToServer = Match_SSH_MSG_KEXINIT(local.MACAlgorithmsClientToServer, server.MACAlgorithmsClientToServer);
+        result.MACAlgorithmsServerToClient = Match_SSH_MSG_KEXINIT(local.MACAlgorithmsServerToClient, server.MACAlgorithmsServerToClient);
         return result;
     }
 
@@ -2727,25 +2662,25 @@ public class Tclote
             int messageCode = (int)reader.ReadByte();
             var cookie = reader.ReadBytes(16);
             var kex_algorithm_length = reader.ReadInt32V2();
-            result.kex_algorithms = Encoding.UTF8.GetString(reader.ReadBytes(kex_algorithm_length));
+            result.KEXAlgorithms = Encoding.UTF8.GetString(reader.ReadBytes(kex_algorithm_length));
             var server_host_key_algorithms_length = reader.ReadInt32V2();
-            result.server_host_key_algorithms = Encoding.UTF8.GetString(reader.ReadBytes(server_host_key_algorithms_length));
+            result.ServerHostKeyAlgorithms = Encoding.UTF8.GetString(reader.ReadBytes(server_host_key_algorithms_length));
             var encryption_algorithms_client_to_server_length = reader.ReadInt32V2();
-            result.encryption_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_client_to_server_length));
+            result.EncryptionAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_client_to_server_length));
             var encryption_algorithms_server_to_client_length = reader.ReadInt32V2();
-            result.encryption_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_server_to_client_length));
+            result.EncryptionAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_server_to_client_length));
             var mac_algorithms_client_to_server_length = reader.ReadInt32V2();
-            result.mac_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_client_to_server_length));
+            result.MACAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_client_to_server_length));
             var mac_algorithms_server_to_client_length = reader.ReadInt32V2();
-            result.mac_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_server_to_client_length));
+            result.MACAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_server_to_client_length));
             var compression_algorithms_client_to_server_length = reader.ReadInt32V2();
-            result.compression_algorithms_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_client_to_server_length));
+            result.CompressionAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_client_to_server_length));
             var compression_algorithms_server_to_client_length = reader.ReadInt32V2();
-            result.compression_algorithms_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_server_to_client_length));
+            result.CompressionAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_server_to_client_length));
             var languages_client_to_server_length = reader.ReadInt32V2();
-            result.languages_client_to_server = Encoding.UTF8.GetString(reader.ReadBytes(languages_client_to_server_length));
+            result.LanguagesClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(languages_client_to_server_length));
             var languages_server_to_client_length = reader.ReadInt32V2();
-            result.languages_server_to_client = Encoding.UTF8.GetString(reader.ReadBytes(languages_server_to_client_length));
+            result.LanguagesServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(languages_server_to_client_length));
             var first_kex_packet_follows = reader.ReadBoolean();
             var reserved_for_future_extension = reader.ReadInt32();
             var padding = reader.ReadBytes(paddingLength);
@@ -2757,32 +2692,41 @@ public class Tclote
     private SSH_MSG_KEXINIT Get_SSH_MSG_KEXINIT()
     {
         var result = new SSH_MSG_KEXINIT();
-        result.kex_algorithms = config["kex_algorithms"];
-        result.server_host_key_algorithms = config["server_host_key_algorithms"];
-        result.encryption_algorithms_client_to_server = config["encryption_algorithms_client_to_server"];
-        result.encryption_algorithms_server_to_client = config["encryption_algorithms_server_to_client"];
-        result.mac_algorithms_client_to_server = config["mac_algorithms_client_to_server"];
-        result.mac_algorithms_server_to_client = config["mac_algorithms_server_to_client"];
-        result.compression_algorithms_client_to_server = config["compression_algorithms_client_to_server"];
-        result.compression_algorithms_server_to_client = config["compression_algorithms_server_to_client"];
-        result.languages_client_to_server = config["languages_client_to_server"];
-        result.languages_server_to_client = config["languages_server_to_client"];
+        result.KEXAlgorithms = config["kex_algorithms"];
+        result.ServerHostKeyAlgorithms = config["server_host_key_algorithms"];
+        result.EncryptionAlgorithmsClientToServer = config["encryption_algorithms_client_to_server"];
+        result.EncryptionAlgorithmsServerToClient = config["encryption_algorithms_server_to_client"];
+        result.MACAlgorithmsClientToServer = config["mac_algorithms_client_to_server"];
+        result.MACAlgorithmsServerToClient = config["mac_algorithms_server_to_client"];
+        result.CompressionAlgorithmsClientToServer = config["compression_algorithms_client_to_server"];
+        result.CompressionAlgorithmsServerToClient = config["compression_algorithms_server_to_client"];
+        result.LanguagesClientToServer = config["languages_client_to_server"];
+        result.LanguagesServerToClient = config["languages_server_to_client"];
         return result;
     }
 }
 
 public class SSH_MSG_KEXINIT
 {
-    public string compression_algorithms_client_to_server { get; set; }
-    public string compression_algorithms_server_to_client { get; set; }
-    public string encryption_algorithms_client_to_server { get; set; }
-    public string encryption_algorithms_server_to_client { get; set; }
-    public string kex_algorithms { get; set; }
-    public string languages_client_to_server { get; set; }
-    public string languages_server_to_client { get; set; }
-    public string mac_algorithms_client_to_server { get; set; }
-    public string mac_algorithms_server_to_client { get; set; }
-    public string server_host_key_algorithms { get; set; }
+    public string CompressionAlgorithmsClientToServer { get; set; }
+
+    public string CompressionAlgorithmsServerToClient { get; set; }
+
+    public string EncryptionAlgorithmsClientToServer { get; set; }
+
+    public string EncryptionAlgorithmsServerToClient { get; set; }
+
+    public string KEXAlgorithms { get; set; }
+
+    public string LanguagesClientToServer { get; set; }
+
+    public string LanguagesServerToClient { get; set; }
+
+    public string MACAlgorithmsClientToServer { get; set; }
+
+    public string MACAlgorithmsServerToClient { get; set; }
+
+    public string ServerHostKeyAlgorithms { get; set; }
 }
 
 public class DiffieHellmanGroup1
@@ -2843,10 +2787,6 @@ public class DiffieHellmanMerkle
 
 public class Cipher
 {
-    public int IVSize { get; private set; } = 8;
-
-    public int BlockSize { get; private set; } = 24;
-
     private TripleDESCryptoServiceProvider triDes = new TripleDESCryptoServiceProvider();
     private ICryptoTransform cipher;
 
@@ -2857,8 +2797,8 @@ public class Cipher
         cipher = mode == 0 ? triDes.CreateEncryptor(key, iv) : triDes.CreateDecryptor(key, iv);
     }
 
-    public void Transform(byte[] foo, int s1, int len, byte[] bar, int s2)
+    public void Transform(byte[] inputBuffer, int inputOffset, int inputCount, byte[] outputBuffer, int outputOffset)
     {
-        cipher.TransformBlock(foo, s1, len, bar, s2);
+        cipher.TransformBlock(inputBuffer, inputOffset, inputCount, outputBuffer, outputOffset);
     }
 }
