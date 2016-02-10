@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Org.Mentalis.Security.Cryptography;
+using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -1908,6 +1909,27 @@ public static class Extensions
         write.Write(bytes);
     }
 
+    public static int ToInt32(this byte[] bytes)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            Array.Reverse(bytes, 0, 4);
+        }
+
+        return BitConverter.ToInt32(bytes, 0);
+    }
+
+    public static byte[] ToBytes(this int value)
+    {
+        var bytes = BitConverter.GetBytes(value);
+        if (BitConverter.IsLittleEndian)
+        {
+            Array.Reverse(bytes);
+        }
+
+        return bytes;
+    }
+
     public static bool IsDirectory(this FileSystemInfo m_theInfo)
     {
         return (m_theInfo.Attributes & System.IO.FileAttributes.Directory) != 0;
@@ -2165,7 +2187,10 @@ public class Tclote
     private byte[] H;
     private byte[] sessionID;
 
-    private int seqi = 0;
+    private HMACMD5 s2cmac;
+    private HMACMD5 c2smac;
+
+    private int seqi = 3;
     private int seqo = 0;
 
     public Tclote()
@@ -2258,13 +2283,21 @@ public class Tclote
                         byte[m]   mac (Message Authentication Code - MAC); m = mac_length
                         */
                         I_C = GetSSH_MSG_KEXINIT();
-                        SendPayload(networkStream, I_C);
+                        WritePayload(networkStream, I_C);
 
                         var diffieHellmanGroup1diff = new DiffieHellmanGroup1();
                         var guess_SSH_MSG_KEXINIT = Guess_SSH_MSG_KEXINIT(server_SSH_MSG_KEXINIT, local_SSH_MSG_KEXINIT);
                         var e = GetMPInt(diffieHellmanGroup1diff.getE());
                         int SSH_MSG_KEXDH_INIT = 30;
-                        SendPayload(networkStream, new[] { (byte)SSH_MSG_KEXDH_INIT }, e);
+                        using (var memory = new MemoryStream())
+                        {
+                            using (var writer = new BinaryWriter(memory))
+                            {
+                                writer.Write((byte)SSH_MSG_KEXDH_INIT);
+                                this.WriteBytes(writer, e);
+                                WritePayload(networkStream, memory.ToArray());
+                            }
+                        }
 
                         count = networkStream.Read(buffer);
                         var verified = false;
@@ -2276,12 +2309,11 @@ public class Tclote
                         if (verified)
                         {
                             var SSH_MSG_NEWKEYS = 21;
-                            SendPayload(networkStream, new[] { (byte)SSH_MSG_NEWKEYS });
+                            WritePayload(networkStream, new[] { (byte)SSH_MSG_NEWKEYS });
 
                             if (ReceiveNewKeys(buffer, count))
                             {
                                 sessionID = H.Copy();
-
                                 /*
                                   Initial IV client to server:     HASH (K || H || "A" || session_id)
                                   Initial IV server to client:     HASH (K || H || "B" || session_id)
@@ -2290,14 +2322,15 @@ public class Tclote
                                   Integrity key client to server:  HASH (K || H || "E" || session_id)
                                   Integrity key server to client:  HASH (K || H || "F" || session_id)
                                 */
-                                IVc2s = Hash(K, H, new[] { (byte)0x41 }, sessionID);
-                                IVs2c = Hash(K, H, new[] { (byte)0x42 }, sessionID);
-                                Ec2s = Hash(K, H, new[] { (byte)0x43 }, sessionID);
-                                Ec2s = Concatenation(Ec2s, Hash(K, H, Ec2s));
-                                Es2c = Hash(K, H, new[] { (byte)0x44 }, sessionID);
-                                Es2c = Concatenation(Es2c, Hash(K, H, Es2c));
-                                MACc2s = Hash(K, H, new[] { (byte)0x45 }, sessionID);
-                                MACs2c = Hash(K, H, new[] { (byte)0x46 }, sessionID);
+                                var l = K.Length.ToBytes();
+                                IVc2s = Hash(l, K, H, new[] { (byte)0x41 }, sessionID);
+                                IVs2c = Hash(l, K, H, new[] { (byte)0x42 }, sessionID);
+                                Ec2s = Hash(l, K, H, new[] { (byte)0x43 }, sessionID);
+                                Ec2s = Concatenation2(Ec2s, Hash(l, K, H, Ec2s));
+                                Es2c = Hash(l, K, H, new[] { (byte)0x44 }, sessionID);
+                                Es2c = Concatenation2(Es2c, Hash(l, K, H, Es2c));
+                                MACc2s = Hash(l, K, H, new[] { (byte)0x45 }, sessionID);
+                                MACs2c = Hash(l, K, H, new[] { (byte)0x46 }, sessionID);
 
                                 /*var foo = Hash(K, H, Es2c);
                                 var bar = new byte[Es2c.Length + foo.Length];
@@ -2305,7 +2338,7 @@ public class Tclote
                                 Array.Copy(foo, 0, bar, Es2c.Length, foo.Length);
                                 Es2c = bar;*/
 
-                                this.cipherSize = IVs2c.Length;
+                                //this.cipherSize = IVs2c.Length;
 
                                 /*foo = Hash(K, H, Ec2s);
                                 bar = new byte[Ec2s.Length + foo.Length];
@@ -2315,23 +2348,26 @@ public class Tclote
 
                                 this.decrypter = new Cipher(1, Es2c, IVs2c);
                                 this.encrypter = new Cipher(0, Ec2s, IVc2s);
-                                /*
-                                  try
-                                  {                                                                   
-                                      c = Class.forName(getConfig(guess[KeyExchange.PROPOSAL_MAC_ALGS_STOC]));
-                                      s2cmac = (MAC)(c.newInstance());
-                                      s2cmac.init(MACs2c);
+                                s2cmac = new HMACMD5();
+                                s2cmac.init(MACs2c);
 
-                                      c = Class.forName(getConfig(guess[KeyExchange.PROPOSAL_MAC_ALGS_CTOS]));
-                                      c2smac = (MAC)(c.newInstance());
-                                      c2smac.init(MACc2s);
+                                c2smac = new HMACMD5();
+                                c2smac.init(MACc2s);
 
-                                   
-                                  }
-                                  catch (Exception e) { System.Console.Error.WriteLine("updatekeys: " + e); }*/
+                                using (var memory = new MemoryStream())
+                                {
+                                    using (var writer = new BinaryWriter(memory))
+                                    {
+                                        int SSH_MSG_SERVICE_REQUEST = 5;
+                                        writer.Write((byte)SSH_MSG_SERVICE_REQUEST);
+                                        WriteBytes(writer, "ssh-userauth".ToBytes());
+                                        WritePayload(networkStream, memory.ToArray());
+                                    }
+                                }
+
+                                count = networkStream.Read(buffer);
+                                ReadPayload(buffer, count);
                             }
-
-                            count = networkStream.Read(buffer);
                         }
 
                         //command = Encoding.UTF8.GetString(buffer, 0, count).Trim(Environment.NewLine);
@@ -2347,7 +2383,7 @@ public class Tclote
         }
     }
 
-    private void SendPayload(NetworkStream stream, params byte[][] buffers)
+    private void WritePayload(NetworkStream stream, params byte[][] buffers)
     {
         using (var memory = new MemoryStream())
         {
@@ -2356,8 +2392,60 @@ public class Tclote
             {
                 var length = buffers.Sum(l => l.Length);
                 buffers.ForEach(p => writer.Write(p));
-                WrapPacket(memory, writer, length);
+                EncodePacket(memory, writer, length);
                 memory.WriteTo(stream);
+            }
+        }
+    }
+
+
+    private void ReadPayload(byte[] buffer, int count)
+    {
+        using (var memory = new MemoryStream(buffer, 0, count))
+        {
+            using (var reader = new BinaryReader(memory))
+            {
+                using (var m = new MemoryStream())
+                {
+                    using (var writer = new BinaryWriter(m))
+                    {
+                        var bytes = reader.ReadBytes(cipherSize);
+                        if (decrypter != null)
+                        {
+                            decrypter.Transform(bytes, 0, cipherSize, bytes, 0);                           
+                        }
+
+                        writer.Write(bytes);
+                        var packetLength = bytes.ToInt32();
+                        packetLength = packetLength - 4 - cipherSize + 8;
+                        if (packetLength > 0)
+                        {
+                            var bytes2 = reader.ReadBytes(packetLength);
+                            if (decrypter != null)
+                            {
+                                decrypter.Transform(bytes2, 0, packetLength, bytes2, 0);
+                            }
+
+                            writer.Write(bytes2);
+                        }
+
+                        if (s2cmac != null)
+                        {
+                            /*s2cmac.update(seqi);
+                            s2cmac.update(buf.buffer, 0, buf.index);
+                            byte[] result = s2cmac.doFinal();
+                            io.getByte(mac_buf, 0, mac_buf.Length);
+                            if (!Arrays.equals(result, mac_buf))
+                            {
+                                throw new IOException("MAC Error");
+                            }*/
+                        }
+
+                        seqi++;
+
+                        var msg= m.ToArray().ToString((int)m.Length);
+                    }
+                }
             }
         }
     }
@@ -2455,6 +2543,18 @@ public class Tclote
                     WriteBytes(writer, buffer);
                 }
 
+                return memory.ToArray();
+            }
+        }
+    }
+
+    private byte[] Concatenation2(params byte[][] buffers)
+    {
+        using (var memory = new MemoryStream())
+        {
+            using (var writer = new BinaryWriter(memory))
+            {
+                buffers.ForEach(b => writer.Write(b));
                 return memory.ToArray();
             }
         }
@@ -2568,11 +2668,10 @@ public class Tclote
          padding SHOULD consist of random bytes.  The maximum amount of
          padding is 255 bytes.
          */
-    private void WrapPacket(MemoryStream memory, BinaryWriter writer, int payloadLength)
+    private void EncodePacket(MemoryStream memory, BinaryWriter writer, int payloadLength)
     {
         var length = payloadLength + 4 + 1;
         var paddingLength = cipherSize * 2 - (int)length % cipherSize;
-
         memory.Seek(4, SeekOrigin.Begin);
         writer.Write((byte)paddingLength);
         if (paddingLength > 0)
@@ -2584,6 +2683,37 @@ public class Tclote
         var packetLength = payloadLength + paddingLength + 1;
         memory.Seek(0, SeekOrigin.Begin);
         writer.WriteInt32(packetLength);
+
+        if (encrypter != null)
+        {
+            memory.Seek(-paddingLength, SeekOrigin.End);
+            writer.Write(paddingLength.RandomBytes());
+        }
+
+        var buffer = memory.ToArray();
+        var mac = default(byte[]);
+        if (c2smac != null)
+        {
+            c2smac.update(seqo);
+            c2smac.update(buffer, 0, buffer.Length);
+            mac = c2smac.doFinal();
+        }
+
+        if (encrypter != null)
+        {
+            encrypter.Transform(buffer, 0, buffer.Length, buffer, 0);
+        }
+
+        memory.SetLength(0);
+        writer.Write(buffer);
+
+        if (mac != null)
+        {
+            writer.Seek(0, SeekOrigin.End);
+            writer.Write(mac);
+        }
+
+        seqo++;
     }
 
     /*The mpint encoding requires a leading zero bit*/
@@ -2655,37 +2785,34 @@ public class Tclote
     private SSH_MSG_KEXINIT Read_SSH_MSG_KEXINIT(MemoryStream memory, BinaryReader reader)
     {
         var result = new SSH_MSG_KEXINIT();
-        {
-            memory.Seek(0, SeekOrigin.Begin);
-            var package_length = reader.ReadInt32V2();
-            var paddingLength = (int)reader.ReadByte();
-            int messageCode = (int)reader.ReadByte();
-            var cookie = reader.ReadBytes(16);
-            var kex_algorithm_length = reader.ReadInt32V2();
-            result.KEXAlgorithms = Encoding.UTF8.GetString(reader.ReadBytes(kex_algorithm_length));
-            var server_host_key_algorithms_length = reader.ReadInt32V2();
-            result.ServerHostKeyAlgorithms = Encoding.UTF8.GetString(reader.ReadBytes(server_host_key_algorithms_length));
-            var encryption_algorithms_client_to_server_length = reader.ReadInt32V2();
-            result.EncryptionAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_client_to_server_length));
-            var encryption_algorithms_server_to_client_length = reader.ReadInt32V2();
-            result.EncryptionAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_server_to_client_length));
-            var mac_algorithms_client_to_server_length = reader.ReadInt32V2();
-            result.MACAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_client_to_server_length));
-            var mac_algorithms_server_to_client_length = reader.ReadInt32V2();
-            result.MACAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_server_to_client_length));
-            var compression_algorithms_client_to_server_length = reader.ReadInt32V2();
-            result.CompressionAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_client_to_server_length));
-            var compression_algorithms_server_to_client_length = reader.ReadInt32V2();
-            result.CompressionAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_server_to_client_length));
-            var languages_client_to_server_length = reader.ReadInt32V2();
-            result.LanguagesClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(languages_client_to_server_length));
-            var languages_server_to_client_length = reader.ReadInt32V2();
-            result.LanguagesServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(languages_server_to_client_length));
-            var first_kex_packet_follows = reader.ReadBoolean();
-            var reserved_for_future_extension = reader.ReadInt32();
-            var padding = reader.ReadBytes(paddingLength);
-        }
-
+        memory.Seek(0, SeekOrigin.Begin);
+        var package_length = reader.ReadInt32V2();
+        var paddingLength = (int)reader.ReadByte();
+        int messageCode = (int)reader.ReadByte();
+        var cookie = reader.ReadBytes(16);
+        var kex_algorithm_length = reader.ReadInt32V2();
+        result.KEXAlgorithms = Encoding.UTF8.GetString(reader.ReadBytes(kex_algorithm_length));
+        var server_host_key_algorithms_length = reader.ReadInt32V2();
+        result.ServerHostKeyAlgorithms = Encoding.UTF8.GetString(reader.ReadBytes(server_host_key_algorithms_length));
+        var encryption_algorithms_client_to_server_length = reader.ReadInt32V2();
+        result.EncryptionAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_client_to_server_length));
+        var encryption_algorithms_server_to_client_length = reader.ReadInt32V2();
+        result.EncryptionAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(encryption_algorithms_server_to_client_length));
+        var mac_algorithms_client_to_server_length = reader.ReadInt32V2();
+        result.MACAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_client_to_server_length));
+        var mac_algorithms_server_to_client_length = reader.ReadInt32V2();
+        result.MACAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(mac_algorithms_server_to_client_length));
+        var compression_algorithms_client_to_server_length = reader.ReadInt32V2();
+        result.CompressionAlgorithmsClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_client_to_server_length));
+        var compression_algorithms_server_to_client_length = reader.ReadInt32V2();
+        result.CompressionAlgorithmsServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(compression_algorithms_server_to_client_length));
+        var languages_client_to_server_length = reader.ReadInt32V2();
+        result.LanguagesClientToServer = Encoding.UTF8.GetString(reader.ReadBytes(languages_client_to_server_length));
+        var languages_server_to_client_length = reader.ReadInt32V2();
+        result.LanguagesServerToClient = Encoding.UTF8.GetString(reader.ReadBytes(languages_server_to_client_length));
+        var first_kex_packet_follows = reader.ReadBoolean();
+        var reserved_for_future_extension = reader.ReadInt32();
+        var padding = reader.ReadBytes(paddingLength);
         return result;
     }
 
@@ -2794,11 +2921,70 @@ public class Cipher
     {
         triDes.Mode = CipherMode.CBC;
         triDes.Padding = PaddingMode.None;
-        cipher = mode == 0 ? triDes.CreateEncryptor(key, iv) : triDes.CreateDecryptor(key, iv);
+        var k = key.Copy(0, triDes.Key.Length);
+        var v = iv.Copy(0, triDes.IV.Length);
+        cipher = mode == 0 ? triDes.CreateEncryptor(k, v) : triDes.CreateDecryptor(k, v);
     }
 
     public void Transform(byte[] inputBuffer, int inputOffset, int inputCount, byte[] outputBuffer, int outputOffset)
     {
         cipher.TransformBlock(inputBuffer, inputOffset, inputCount, outputBuffer, outputOffset);
+    }
+}
+
+public class HMACMD5
+{
+    private const String name = "hmac-md5";
+    private const int bsize = 16;
+    private Org.Mentalis.Security.Cryptography.HMAC mentalis_mac;
+    private CryptoStream cs;
+    //private Mac mac;
+    public int getBlockSize() { return bsize; }
+    public void init(byte[] key)
+    {
+        if (key.Length > bsize)
+        {
+            byte[] tmp = new byte[bsize];
+            Array.Copy(key, 0, tmp, 0, bsize);
+            key = tmp;
+        }
+        //    SecretKeySpec skey=new SecretKeySpec(key, "HmacMD5");
+        //    mac=Mac.getInstance("HmacMD5");
+        //    mac.init(skey);
+        mentalis_mac = new Org.Mentalis.Security.Cryptography.HMAC(new System.Security.Cryptography.MD5CryptoServiceProvider(), key);
+        cs = new System.Security.Cryptography.CryptoStream(System.IO.Stream.Null, mentalis_mac, System.Security.Cryptography.CryptoStreamMode.Write);
+    }
+
+    private byte[] tmp = new byte[4];
+    public void update(int i)
+    {
+        tmp[0] = (byte)(i >> 24);
+        tmp[1] = (byte)(i >> 16);
+        tmp[2] = (byte)(i >> 8);
+        tmp[3] = (byte)i;
+        update(tmp, 0, 4);
+    }
+
+    public void update(byte[] foo, int s, int l)
+    {
+        //mac.update(foo, s, l);
+        cs.Write(foo, s, l);
+    }
+
+    public byte[] doFinal()
+    {
+        //return mac.doFinal();
+        cs.Close();
+        byte[] result = mentalis_mac.Hash;
+        byte[] key = mentalis_mac.Key;
+        mentalis_mac.Clear();
+        init(key);
+
+        return result;
+    }
+
+    public String getName()
+    {
+        return name;
     }
 }
