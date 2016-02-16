@@ -2129,7 +2129,7 @@ public class Sulfate
                 url = url.Substring(baseAddress.Length);
             }
 
-            var bufferSize = 10240;
+            var bufferSize = 2048;
             using (var handler = new HttpClientHandler { UseCookies = false })
             {
                 var httpClient = new HttpClient(handler) { BaseAddress = new Uri(baseAddress) };
@@ -2173,12 +2173,12 @@ public class Sulfate
                         {
                             fileStream.Seek(offset, SeekOrigin.Begin);
                             var buffer = new byte[bufferSize];
-                            var count = 0;
+                            //var count = 0;
                             var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
                             fileInfo.Refresh();
                             Console.WriteLine($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
-
-                            do
+                            await networkStream.CopyToAsync(fileStream);
+                            /*do
                             {
                                 count = networkStream.Read(buffer);
                                 fileStream.Write(buffer, count);
@@ -2196,7 +2196,7 @@ public class Sulfate
                                 {
                                     Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|--%) '{fileInfo.FullName}'.");
                                 }
-                            } while (count > 0);
+                            } while (count > 0);*/
 
                             Console.WriteLine($"Finished downloading({length:#,#}) '{fileInfo.FullName}'.");
                         }
