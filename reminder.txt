@@ -1,4 +1,6 @@
 Pinyin4net.dll
+"C:\Program Files (x86)\MSBuild\14.0\Bin\amd64\csc.exe" /t:library /out:tcp-test.dll tcp-test.cs /r:System.Net.Http.dll
+
 how to run a dns server
 
 [DllImport("advapi32.dll")]

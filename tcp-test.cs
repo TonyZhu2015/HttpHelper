@@ -1,5 +1,4 @@
-﻿using Org.Mentalis.Security.Cryptography;
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -9,6 +8,8 @@ using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -17,7 +18,6 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
-using System.Windows;
 using System.Xml.Serialization;
 
 /*
@@ -100,7 +100,7 @@ public class FileBridge
                 }
             }
             while (process);
-            MessageBox.Show("connection closed");
+            //MessageBox.Show("connection closed");
         }
         finally
         {
@@ -137,11 +137,11 @@ public class FileBridge
                     {
                         stream.Seek(0, SeekOrigin.Begin);
                         stream.CopyTo(memoryStream);
-                        MessageBox.Show(string.Format("body:{0}{1}", Environment.NewLine, Encoding.UTF8.GetString(memoryStream.ToArray())));
+                        //MessageBox.Show(string.Format("body:{0}{1}", Environment.NewLine, Encoding.UTF8.GetString(memoryStream.ToArray())));
                     }
                 }
 
-                MessageBox.Show(httpHeader);
+                //MessageBox.Show(httpHeader);
                 var html = string.Empty;
                 using (var outputStream = new OutputStream(socket))
                 {
@@ -501,6 +501,25 @@ public class BoyerMoore
 
 public static class Extensions
 {
+    public static string Hash(this string inputString)
+    {
+        var stringBuilder = new StringBuilder();
+        foreach (byte @byte in GetHash(inputString))
+        {
+            stringBuilder.Append(@byte.ToString("X2"));
+        }
+
+        return stringBuilder.ToString();
+    }
+
+    public static byte[] GetHash(string inputString)
+    {
+        using (var algorithm = SHA1.Create())
+        {
+            return algorithm.ComputeHash(Encoding.UTF8.GetBytes(inputString));
+        }
+    }
+
     public static string ToHtmlEncodedString(this string s)
     {
         if (String.IsNullOrEmpty(s))
@@ -1159,9 +1178,14 @@ public static class Extensions
         stream.Write(Encoding.UTF8.GetBytes(message));
     }
 
-    public static void Write(this NetworkStream stream, byte[] buffer)
+    public static void Write(this Stream stream, byte[] buffer)
     {
         stream.Write(buffer, 0, buffer.Length);
+    }
+
+    public static void Write(this Stream stream, byte[] buffer, int count)
+    {
+        stream.Write(buffer, 0, count);
     }
 
     public static void WriteLine(this NetworkStream stream, byte[] buffer)
@@ -2084,74 +2108,112 @@ public static class Extensions
 
 public class Sulfate
 {
-	static async Task HttpGetForLargeFileInRightWay()
-{
-    using (HttpClient client = new HttpClient())
+    public void Download(string cookie, IEnumerable<string> items, string folder)
     {
-        const string url = "https://github.com/tugberkugurlu/ASPNETWebAPISamples/archive/master.zip";
-        using (HttpResponseMessage response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
-        using (Stream streamToReadFrom = await response.Content.ReadAsStreamAsync())
+        foreach (var item in items.Where(l => !string.IsNullOrEmpty(l)))
         {
-            string fileToWriteTo = Path.GetTempFileName();
-            using (Stream streamToWriteTo = File.Open(fileToWriteTo, FileMode.Create))
+            ThreadPool.QueueUserWorkItem(async delegate
             {
-                await streamToReadFrom.CopyToAsync(streamToWriteTo);
-            }
+                await DownloadAsync(item, cookie, folder);
+            });
         }
     }
-}
 
-	 private async void button_Click(object sender, RoutedEventArgs e)
+    public async Task DownloadAsync(string url, string cookie, string folder)
+    {
+        try
         {
-            var url = "/download?fid=ykB7Up7qlz0/TVwx6t9he0ptVx9hlQseAAAAAC7sU3tT/pRGOqYHXGtKrBuHyLde&mid=666&threshold=150&tid=0798F3EE2579F1CB68C4115197CE9ED7&srcid=4&verno=1&g=2EEC537B53FE94463AA6075C6B4AAC1B87C8B75E&scn=c16&i=77A508280851E8CCA29639F5E22406061FDACCF4&t=6&ui=551334162&ti=1247652398242624&s=504075617&m=0&n=01255E9331746F6E2E2053863A792E53305774D46E2E373230111FD1713143682E235D910D61792E5204748A3C2D4465652B509D1E686D65644F5C8F2900000000&ih=77A508280851E8CCA29639F5E22406061FDACCF4&fi=1&pi=1247652398177024&ff=0&co=E58B9489015049691BDC6FC40C077B03&cm=1&pk=lixian&ak=1:0:1:3&e=1463299884&ms=10485760&ck=25A4233F9F85C63636FF74AE7BB74914&at=3144D493A4365767CA10428453DA32D9";
-            var cookie = "HABOWEBUID=097bd64def9c4b55412eedbfe9067907; __xltjbr=1455522578321; ad=2; paycookie=; vip_referfrom=pc_gw_button_kt; xl9Cookie=vip_sessionid%3DED4F1F8B32C43E89B966885880B75BDD098A19B9E0B24CB3225DF9EA6AE04BBE6049E0B01847DF0EBA786C213ECECBC4A7845D529DE9850D2DB7D05CE6D4FFD5%26vip_nickname%3Djurryzhu%26vip_usrname%3Djurryzhu%26vip_growvalue%3D10249%26vip_expiredate%3D2015-09-13%26vip_level%3D5%26vip_isvip%3D0%26vip_daily%3D15%26vas_type%3D2%26history%3D1%26vip_paytype%3D5; Hm_lvt_be94a17b28798d3dc61eb511641cdd9a=1455522580; Hm_lpvt_be94a17b28798d3dc61eb511641cdd9a=1455523309; ci_session=a5a154ec951eaecf67bf69c59505c52f; vipcookie=vip_sessionid%3D12C1CD35C3E08A938B909DEE51FC85F4A53817D5D67D71A059631CD5C9C62E63338AD1A9EEDB09E787C5714B466AA1117EB57C5C8549557B923C59E013507D2E%26vip_nickname%3D0929zhurong%26vip_usrname%3Djurryzhu%26vip_growvalue%3D0%26vip_expiredate%3D2016-03-17%26vip_level%3D1%26vip_paytype%3D4%26vip_isvip%3D1%26vip_daily%3D12%26vip_payname%3D%25E7%25BD%2591%25E9%2593%25B6%25E6%2594%25AF%25E4%25BB%2598%25E6%2596%25B9%25E5%25BC%258F%26vas_type%3D3%26history%3D1%26vip_kn_isvip%3D0%26vip_kn_level%3D0%26payrandom%3D1%26btest%3D0%26vip_isyear%3D0%26vip_is_good_number%3D0%26vip_autopay%3D0%26act_cmb%3D0%26vip_ischild%3D0%26jsq_type%3D0%26jsq_level%3D0%26jsq_growvalue%3D0%26jsq_score%3D45%26jsq_expiretype%3D2%26red_isvip%3D0; risk_tokenid=kkpr8s3ab7tdtp321455523397014; _x_t_=0; isvip=1; usrname=; upgrade=; score=0; order=232321553; result=200; jumpkey=99F02F70CD3722A8E87921DFEDF0F7357B43487200588AD8A5785F41E4A18D921C3C8B084867D94210A030901B85DE0F97B8D49A9CC433F6418ABA7EF29EE9A919D49912A8C4B5235AB0EDB64DC2EA6605BBD8345F685A210E573A8B8E51FA55; sessionid=12C1CD35C3E08A938B909DEE51FC85F4A53817D5D67D71A059631CD5C9C62E63338AD1A9EEDB09E787C5714B466AA1117EB57C5C8549557B923C59E013507D2E; blogresult=0; usernick=0929zhurong; logintype=0; state=0; usertype=0; usernewno=473798247; userid=551334162; deviceid=wdi10.ea59e51005eca554df66915ec9d0ade1ea7b5a13d405b6315023604e0d053919; referfrom=VIP_3591; in_xl=0; vas_type=3; anterpriseac=0%230; lx_sessionid=12C1CD35C3E08A938B909DEE51FC85F4A53817D5D67D71A059631CD5C9C62E63338AD1A9EEDB09E787C5714B466AA1117EB57C5C8549557B923C59E013507D2E; lx_login=551334162; last_userid=551334162; login_time=0.3832950592041; loadding_img=0; rw_list_open=1; __utmc=; __utma=; __utmz=; VERIFY_KEY=; queryTime=1; moretasknum=0; vip_isvip=1; vip_level=1; vip_paytype=4; user_type=1; vip_expiredate=2016-03-17; dl_enable=1; dl_size=2097153; dl_num=143; user_task_time=0.31400609016418; _xltj=34a1455544763187b7c22a1455523359761b1c; default_version=1.0; dl_expire=365; gdriveid=25A4233F9F85C63636FF74AE7BB74914; lx_nf_all=page_check_all%3Dcommtask%26class_check%3D0%26page_check%3Dcommtask%26fl_page_id%3D0%26class_check_new%3D0%26set_tab_status%3D4; bg_opentime=; task_nowclick=0";
-            var fileInfo = new FileInfo(@"C:\Users\Rong\Pictures\test.mkv");
-            var offset = fileInfo.Exists ? fileInfo.Length : 0;
-            var baseAddress = new Uri("http://gdl.lixian.vip.xunlei.com");
+            var baseAddress = "http://gdl.lixian.vip.xunlei.com";
+            if (url.StartsWith(baseAddress))
+            {
+                url = url.Substring(baseAddress.Length);
+            }
 
-            var length =  await GetLength(baseAddress, url, cookie);
+            var bufferSize = 10240;
             using (var handler = new HttpClientHandler { UseCookies = false })
             {
-                var httpClient = new HttpClient(handler) { BaseAddress = baseAddress };
-                var request2 = new HttpRequestMessage(HttpMethod.Get, url);
-                request2.Headers.Range = new RangeHeaderValue(offset, length);
-                request2.Headers.Add("cookie", cookie);
-                var response = await httpClient.SendAsync(request2, HttpCompletionOption.ResponseHeadersRead);
-                using (var stream = await response.Content.ReadAsStreamAsync())
+                var httpClient = new HttpClient(handler) { BaseAddress = new Uri(baseAddress) };
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Add("cookie", cookie);
+                var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                var fileName = response.Content.Headers.ContentDisposition.FileName;
+                if (string.IsNullOrEmpty(fileName))
                 {
-                    using (var fileStream = new FileStream(fileInfo.FullName, FileMode.OpenOrCreate))
-                    {
-                        fileStream.Seek(offset, SeekOrigin.Begin);
-                        var buffer = new byte[4096];
-                        var count = 0;
-                        do
-                        {
-                            count = stream.Read(buffer, 0, buffer.Length);
-                            fileStream.Write(buffer, 0, count);
-                            fileStream.Flush();
-                        } while (count > 0);
+                    fileName = $"{url.Hash()}.mkv";
+                }
 
-                        MessageBox.Show("!!");
+                var fileInfo = new FileInfo(Path.Combine(folder, fileName.Trim("\"")));
+                var offset = fileInfo.Exists ? fileInfo.Length : 0;
+                var length = -1;
+                var header = response.Content.Headers.FirstOrDefault(h => string.Equals(h.Key, "Content-Length", StringComparison.CurrentCultureIgnoreCase));
+                if (!header.Equals(default(KeyValuePair<string, IEnumerable<string>>)))
+                {
+                    if (!int.TryParse(header.Value.FirstOrDefault(), out length))
+                    {
+                        length = -1;
                     }
+                }
+
+                var acceptRanges = response.Headers.AcceptRanges.Any(s => string.Equals(s, "bytes", StringComparison.CurrentCultureIgnoreCase));
+                if (!acceptRanges)
+                {
+                    offset = 0;
+                }
+
+                request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Add("cookie", cookie);
+                request.Headers.Range = new RangeHeaderValue(offset, null);
+                response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+
+                if (offset != length)
+                {
+                    using (var networkStream = await response.Content.ReadAsStreamAsync())
+                    {
+                        using (var fileStream = new FileStream(fileInfo.FullName, FileMode.OpenOrCreate))
+                        {
+                            fileStream.Seek(offset, SeekOrigin.Begin);
+                            var buffer = new byte[bufferSize];
+                            var count = 0;
+                            var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
+                            fileInfo.Refresh();
+                            Console.WriteLine($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
+
+                            do
+                            {
+                                count = networkStream.Read(buffer);
+                                fileStream.Write(buffer, count);
+                                if (progress != -1)
+                                {
+                                    fileInfo.Refresh();
+                                    var percentage = (int)(fileInfo.Length * 100 / length);
+                                    if (percentage > progress)
+                                    {
+                                        progress = percentage;
+                                        Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
+                                    }
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|--%) '{fileInfo.FullName}'.");
+                                }
+                            } while (count > 0);
+
+                            Console.WriteLine($"Finished downloading({length:#,#}) '{fileInfo.FullName}'.");
+                        }
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"All bytes({length:#,#}) are downloaded '{fileInfo.FullName}'.");
                 }
             }
         }
-
-        private async Task<int> GetLength(Uri baseAddress, string url, string cookie)
+        catch (Exception ex)
         {
-            int length = 0;
-            using (var handler = new HttpClientHandler { UseCookies = false })
-            {
-                var httpClient = new HttpClient(handler) { BaseAddress = baseAddress };
-                var request2 = new HttpRequestMessage(HttpMethod.Get, url);
-                request2.Headers.Add("cookie", cookie);
-                var response = await httpClient.SendAsync(request2, HttpCompletionOption.ResponseHeadersRead);
-                length = int.Parse(response.Content.Headers.First(h => h.Key.Equals("Content-Length")).Value.First());
-            }
-
-            return length;
+            Console.WriteLine($"Error downloading.{Environment.NewLine}{ex.ToString()}");
         }
-		
+    }
+
     public async Task Start(string prefix)
     {
         //SITE chmod 644 /My Web Sites/WebSite1/w-brand.png
@@ -2417,10 +2479,10 @@ public class Tclote
                                 this.decrypter = new Cipher(1, Es2c, IVs2c);
                                 this.encrypter = new Cipher(0, Ec2s, IVc2s);
                                 s2cmac = new HMACMD5();
-                                s2cmac.init(MACs2c);
+                                //s2cmac.init(MACs2c);
 
                                 c2smac = new HMACMD5();
-                                c2smac.init(MACc2s);
+                                //c2smac.init(MACc2s);
 
                                 using (var memory = new MemoryStream())
                                 {
@@ -2480,7 +2542,7 @@ public class Tclote
                         var bytes = reader.ReadBytes(cipherSize);
                         if (decrypter != null)
                         {
-                            decrypter.Transform(bytes, 0, cipherSize, bytes, 0);                           
+                            decrypter.Transform(bytes, 0, cipherSize, bytes, 0);
                         }
 
                         writer.Write(bytes);
@@ -2511,7 +2573,7 @@ public class Tclote
 
                         seqi++;
 
-                        var msg= m.ToArray().ToString((int)m.Length);
+                        var msg = m.ToArray().ToString((int)m.Length);
                     }
                 }
             }
@@ -2762,9 +2824,9 @@ public class Tclote
         var mac = default(byte[]);
         if (c2smac != null)
         {
-            c2smac.update(seqo);
-            c2smac.update(buffer, 0, buffer.Length);
-            mac = c2smac.doFinal();
+            //c2smac.update(seqo);
+            //c2smac.update(buffer, 0, buffer.Length);
+            //mac = c2smac.doFinal();
         }
 
         if (encrypter != null)
@@ -2947,38 +3009,40 @@ public class DiffieHellmanGroup1
                                               (byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF,(byte)0xFF
                                           };
 
-    private DiffieHellmanMerkle diffieHellmanMerkle = new DiffieHellmanMerkle(g, p);
+    //private DiffieHellmanMerkle diffieHellmanMerkle = new DiffieHellmanMerkle(g, p);
 
     public byte[] getE()
     {
-        return diffieHellmanMerkle.GetPublicKey();
+        //return diffieHellmanMerkle.GetPublicKey();
+        return null;
     }
 
     public byte[] getK(byte[] x2)
     {
-        return diffieHellmanMerkle.GetSharedSecret(x2);
+        //return diffieHellmanMerkle.GetSharedSecret(x2);
+        return null;
     }
 }
 
-public class DiffieHellmanMerkle
-{
-    private DiffieHellman diffieHellman;
+//public class DiffieHellmanMerkle
+//{
+//    private DiffieHellman diffieHellman;
 
-    public DiffieHellmanMerkle(byte[] g, byte[] p)
-    {
-        diffieHellman = new DiffieHellmanManaged(p, g, 0);
-    }
+//    public DiffieHellmanMerkle(byte[] g, byte[] p)
+//    {
+//        diffieHellman = new DiffieHellmanManaged(p, g, 0);
+//    }
 
-    public byte[] GetPublicKey()
-    {
-        return diffieHellman.CreateKeyExchange();
-    }
+//    public byte[] GetPublicKey()
+//    {
+//        return diffieHellman.CreateKeyExchange();
+//    }
 
-    public byte[] GetSharedSecret(byte[] x2)
-    {
-        return diffieHellman.DecryptKeyExchange(x2);
-    }
-}
+//    public byte[] GetSharedSecret(byte[] x2)
+//    {
+//        return diffieHellman.DecryptKeyExchange(x2);
+//    }
+//}
 
 public class Cipher
 {
@@ -3000,59 +3064,59 @@ public class Cipher
     }
 }
 
-public class HMACMD5
-{
-    private const String name = "hmac-md5";
-    private const int bsize = 16;
-    private Org.Mentalis.Security.Cryptography.HMAC mentalis_mac;
-    private CryptoStream cs;
-    //private Mac mac;
-    public int getBlockSize() { return bsize; }
-    public void init(byte[] key)
-    {
-        if (key.Length > bsize)
-        {
-            byte[] tmp = new byte[bsize];
-            Array.Copy(key, 0, tmp, 0, bsize);
-            key = tmp;
-        }
-        //    SecretKeySpec skey=new SecretKeySpec(key, "HmacMD5");
-        //    mac=Mac.getInstance("HmacMD5");
-        //    mac.init(skey);
-        mentalis_mac = new Org.Mentalis.Security.Cryptography.HMAC(new System.Security.Cryptography.MD5CryptoServiceProvider(), key);
-        cs = new System.Security.Cryptography.CryptoStream(System.IO.Stream.Null, mentalis_mac, System.Security.Cryptography.CryptoStreamMode.Write);
-    }
+//public class HMACMD5
+//{
+//    private const String name = "hmac-md5";
+//    private const int bsize = 16;
+//    private Org.Mentalis.Security.Cryptography.HMAC mentalis_mac;
+//    private CryptoStream cs;
+//    //private Mac mac;
+//    public int getBlockSize() { return bsize; }
+//    public void init(byte[] key)
+//    {
+//        if (key.Length > bsize)
+//        {
+//            byte[] tmp = new byte[bsize];
+//            Array.Copy(key, 0, tmp, 0, bsize);
+//            key = tmp;
+//        }
+//        //    SecretKeySpec skey=new SecretKeySpec(key, "HmacMD5");
+//        //    mac=Mac.getInstance("HmacMD5");
+//        //    mac.init(skey);
+//        mentalis_mac = new Org.Mentalis.Security.Cryptography.HMAC(new System.Security.Cryptography.MD5CryptoServiceProvider(), key);
+//        cs = new System.Security.Cryptography.CryptoStream(System.IO.Stream.Null, mentalis_mac, System.Security.Cryptography.CryptoStreamMode.Write);
+//    }
 
-    private byte[] tmp = new byte[4];
-    public void update(int i)
-    {
-        tmp[0] = (byte)(i >> 24);
-        tmp[1] = (byte)(i >> 16);
-        tmp[2] = (byte)(i >> 8);
-        tmp[3] = (byte)i;
-        update(tmp, 0, 4);
-    }
+//    private byte[] tmp = new byte[4];
+//    public void update(int i)
+//    {
+//        tmp[0] = (byte)(i >> 24);
+//        tmp[1] = (byte)(i >> 16);
+//        tmp[2] = (byte)(i >> 8);
+//        tmp[3] = (byte)i;
+//        update(tmp, 0, 4);
+//    }
 
-    public void update(byte[] foo, int s, int l)
-    {
-        //mac.update(foo, s, l);
-        cs.Write(foo, s, l);
-    }
+//    public void update(byte[] foo, int s, int l)
+//    {
+//        //mac.update(foo, s, l);
+//        cs.Write(foo, s, l);
+//    }
 
-    public byte[] doFinal()
-    {
-        //return mac.doFinal();
-        cs.Close();
-        byte[] result = mentalis_mac.Hash;
-        byte[] key = mentalis_mac.Key;
-        mentalis_mac.Clear();
-        init(key);
+//    public byte[] doFinal()
+//    {
+//        //return mac.doFinal();
+//        cs.Close();
+//        byte[] result = mentalis_mac.Hash;
+//        byte[] key = mentalis_mac.Key;
+//        mentalis_mac.Clear();
+//        init(key);
 
-        return result;
-    }
+//        return result;
+//    }
 
-    public String getName()
-    {
-        return name;
-    }
-}
+//    public String getName()
+//    {
+//        return name;
+//    }
+//}
