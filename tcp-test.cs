@@ -1,4 +1,6 @@
-﻿using System;
+﻿[assembly:AssemblyVersion("1.0.0.1")]
+
+using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
