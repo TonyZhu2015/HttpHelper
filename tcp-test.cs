@@ -1,6 +1,4 @@
-﻿[assembly:AssemblyVersion("1.0.0.1")]
-
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -21,6 +19,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using System.Xml.Serialization;
+
+[assembly:AssemblyVersion("1.0.0.1")]
+
 
 /*
 command line ftp

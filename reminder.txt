@@ -1,4 +1,33 @@
+In DOS environments, a COM file is an executable command file with a.COM filename extension. COM files can be directly executed and are usually slightly smaller than equivalent EXE files. However, COM files cannot exceed 64K, so large programs are usually stored in EXE files.
+
+In computing, a dynamic linker is the part of an operating system that loads and links the shared libraries needed by an executable when it is executed (at "run time"), by copying the content of libraries from persistent storage to RAM, and filling jump tables and relocating pointers. The specific operating system and executable format determine how the dynamic linker functions and how it is implemented.
+
+Linking is often referred to as a process that is performed when the executable is compiled, while a dynamic linker is a special part of an operating system that loads external shared libraries into a running process and then binds those shared libraries dynamically to the running process. This approach is also called dynamic linking or late linking.
+
+If you're interested in what a compiled program looks like at the a assembler level a much more meaningful approach would be compile and look at the generated assembly. For example with gcc/g++ this just requires gcc -c -S filename.c and will leave a clear text assembly file to look at.
+
+http://www.program-transformation.org/Transform/DeCompilation
+
+Objdump is included in gcc, and there are Windows ports for gcc like MinGW-w64. Just download it and use.
+Alternatively install Cygwin, which is a Unix subsystem on Windows, and run objdump in it
+Another tool is Microsoft DUMPBIN which is included in MS Visual Studio
+
+A bootable CD/DVD is build up according to the El Torito standard.  This means that the ISO9660 File System has an extension which provides information to a BIOS so that the BIOS knows where to boot from and what files to load from where.  Bootable CDs or DVDs are a BIOS thing, once the OS is up and running the bootable structures are ignored.
+
+http://bochs.sourceforge.net/techdata.html
+
+Internet Protocol Security (IPsec) is a protocol suite for secure Internet Protocol (IP) communications by authenticating and encrypting each IP packet of a communication session. IPsec includes protocols for establishing mutual authentication between agents at the beginning of the session and negotiation of cryptographic keys to be used during the session. IPsec can be used in protecting data flows between a pair of hosts (host-to-host), between a pair of security gateways (network-to-network), or between a security gateway and a host (network-to-host).[1]
+
+Internet Protocol security (IPsec) uses cryptographic security services to protect communications over Internet Protocol (IP) networks. IPsec supports network-level peer authentication, data origin authentication, data integrity, data confidentiality (encryption), and replay protection.
+
+IPsec is an end-to-end security scheme operating in the Internet Layer of the Internet Protocol Suite, while some other Internet security systems in widespread use, such as Transport Layer Security (TLS) and Secure Shell (SSH), operate in the upper layers at the Application layer. Hence, only IPsec protects all application traffic over an IP network. Applications can be automatically secured by IPsec at the IP layer.
+
+In computer software, an application binary interface (ABI) is the interface between two program modules, one of which is often a library or operating system, at the level of machine code. An ABI determines such details as how functions are called and in which binary format information should be passed from one program component to the next, or to the operating system in the case of a system call.
+
+Windows RemoteManagement (WinRM) is a feature of Windows Vista that allows administrators to remotely run management scripts. It handles remote connections by means of the WS-Management Protocol, which is based on SOAP (Simple Object Access Protocol). WinRM has features similar to those of Windows Management Instrumentation (WMI) that was installed on all computers using Windows Millennium Edition (Me), Windows 2000, Windows XP or Windows Server 2003.
+
 Pinyin4net.dll
+
 "C:\Program Files (x86)\MSBuild\14.0\Bin\amd64\csc.exe" /t:library /out:tcp-test.dll tcp-test.cs /r:System.Net.Http.dll
 
 how to run a dns server
