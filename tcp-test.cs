@@ -20,7 +20,7 @@ using System.Threading.Tasks;
 using System.Web;
 using System.Xml.Serialization;
 
-[assembly:AssemblyVersion("1.0.0.1")]
+[assembly: AssemblyVersion("1.0.0.1")]
 
 
 /*
@@ -2113,12 +2113,25 @@ public class Sulfate
 {
     public void Download(string cookie, IEnumerable<string> items, string folder)
     {
-        foreach (var item in items.Where(l => !string.IsNullOrEmpty(l)))
+        items = items.Where(l => !string.IsNullOrEmpty(l));
+        using (var countdownEvent = new CountdownEvent(items.Count()))
         {
-            ThreadPool.QueueUserWorkItem(async delegate
+            foreach (var item in items)
             {
-                await DownloadAsync(item, cookie, folder);
-            });
+                ThreadPool.QueueUserWorkItem(async delegate
+                {
+                    try
+                    {
+                        await DownloadAsync(item, cookie, folder);
+                    }
+                    finally
+                    {
+                        countdownEvent.Signal();
+                    }
+                });
+            }
+
+            countdownEvent.Wait();
         }
     }
 
@@ -2147,11 +2160,11 @@ public class Sulfate
 
                 var fileInfo = new FileInfo(Path.Combine(folder, fileName.Trim("\"")));
                 var offset = fileInfo.Exists ? fileInfo.Length : 0;
-                var length = -1;
+                var length = -1L;
                 var header = response.Content.Headers.FirstOrDefault(h => string.Equals(h.Key, "Content-Length", StringComparison.CurrentCultureIgnoreCase));
                 if (!header.Equals(default(KeyValuePair<string, IEnumerable<string>>)))
                 {
-                    if (!int.TryParse(header.Value.FirstOrDefault(), out length))
+                    if (!long.TryParse(header.Value.FirstOrDefault(), out length))
                     {
                         length = -1;
                     }
@@ -2168,46 +2181,53 @@ public class Sulfate
                 request.Headers.Range = new RangeHeaderValue(offset, null);
                 response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
 
-                if (offset != length)
+                if (response.StatusCode == HttpStatusCode.PartialContent)
                 {
-                    using (var networkStream = await response.Content.ReadAsStreamAsync())
+                    if (offset != length)
                     {
-                        using (var fileStream = new FileStream(fileInfo.FullName, FileMode.OpenOrCreate))
+                        using (var networkStream = await response.Content.ReadAsStreamAsync())
                         {
-                            fileStream.Seek(offset, SeekOrigin.Begin);
-                            var buffer = new byte[bufferSize];
-                            //var count = 0;
-                            var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
-                            fileInfo.Refresh();
-                            Console.WriteLine($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
-                            await networkStream.CopyToAsync(fileStream);
-                            /*do
+                            using (var fileStream = new FileStream(fileInfo.FullName, FileMode.OpenOrCreate))
                             {
-                                count = networkStream.Read(buffer);
-                                fileStream.Write(buffer, count);
-                                if (progress != -1)
+                                fileStream.Seek(offset, SeekOrigin.Begin);
+                                var buffer = new byte[bufferSize];
+                                //var count = 0;
+                                var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
+                                fileInfo.Refresh();
+                                Console.WriteLine($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
+                                await networkStream.CopyToAsync(fileStream);
+                                /*do
                                 {
-                                    fileInfo.Refresh();
-                                    var percentage = (int)(fileInfo.Length * 100 / length);
-                                    if (percentage > progress)
+                                    count = networkStream.Read(buffer);
+                                    fileStream.Write(buffer, count);
+                                    if (progress != -1)
                                     {
-                                        progress = percentage;
-                                        Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
+                                        fileInfo.Refresh();
+                                        var percentage = (int)(fileInfo.Length * 100 / length);
+                                        if (percentage > progress)
+                                        {
+                                            progress = percentage;
+                                            Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
+                                        }
                                     }
-                                }
-                                else
-                                {
-                                    Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|--%) '{fileInfo.FullName}'.");
-                                }
-                            } while (count > 0);*/
+                                    else
+                                    {
+                                        Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|--%) '{fileInfo.FullName}'.");
+                                    }
+                                } while (count > 0);*/
 
-                            Console.WriteLine($"Finished downloading({length:#,#}) '{fileInfo.FullName}'.");
+                                Console.WriteLine($"Finished downloading({length:#,#}) '{fileInfo.FullName}'.");
+                            }
                         }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"All bytes({length:#,#}) are downloaded '{fileInfo.FullName}'.");
                     }
                 }
                 else
                 {
-                    Console.WriteLine($"All bytes({length:#,#}) are downloaded '{fileInfo.FullName}'.");
+                    Console.WriteLine($"Unkown status code {response.StatusCode}.");
                 }
             }
         }
