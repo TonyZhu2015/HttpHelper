@@ -1214,8 +1214,9 @@ public static class Extensions
         return await stream.ReadAsync(buffer, 0, buffer.Length);
     }
 
-    public static void Log(string message)
+    public static void Log(this string message)
     {
+        Console.WriteLine($"{DateTime.Now}-{message}");
         File.AppendAllText($@"{AppDomain.CurrentDomain.BaseDirectory}\log.txt", $"{ message}{Environment.NewLine}");
     }
 
@@ -2136,7 +2137,7 @@ public class Sulfate
                     finally
                     {
                         countdownEvent.Signal();
-                        Console.WriteLine($"{countdownEvent.CurrentCount}/{countdownEvent.InitialCount} in-progress downloading");
+                        ($"{countdownEvent.CurrentCount}/{countdownEvent.InitialCount} in-progress downloading").Log();
                     }
                 });
             }
@@ -2191,60 +2192,65 @@ public class Sulfate
                         offset = 0;
                     }
 
-                    request = new HttpRequestMessage(HttpMethod.Get, url);
-                    if (!string.IsNullOrEmpty(cookie))
-                    {
-                        request.Headers.Add("cookie", cookie);
-                    }
-
-                    if (acceptRanges)
-                    {
-                        request.Headers.Range = new RangeHeaderValue(offset, null);
-                    }
-
-                    response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-                    if (response.StatusCode == HttpStatusCode.PartialContent)
+                    try
                     {
                         if (offset != length)
                         {
-                            using (var networkStream = await response.Content.ReadAsStreamAsync())
+                            request = new HttpRequestMessage(HttpMethod.Get, url);
+                            if (!string.IsNullOrEmpty(cookie))
                             {
-                                networkStream.ReadTimeout = Timeout.Infinite;
-                                using (var fileStream = new FileStream(fileInfo.FullName, FileMode.OpenOrCreate))
+                                request.Headers.Add("cookie", cookie);
+                            }
+
+                            if (acceptRanges)
+                            {
+                                request.Headers.Range = new RangeHeaderValue(offset, null);
+                            }
+
+                            response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                            if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.PartialContent)
+                            {
+                                using (var networkStream = await response.Content.ReadAsStreamAsync())
                                 {
-                                    fileStream.Seek(offset, SeekOrigin.Begin);
-                                    fileInfo.Refresh();
-                                    var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
-                                    Console.WriteLine($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
-                                    //await networkStream.CopyToAsync(fileStream);
-                                    await CopyToAsync(networkStream, fileStream, fileInfo, length, progress);
-                                    fileInfo.Refresh();
-                                    offset = fileInfo.Length;
-                                    Console.WriteLine($"Finished downloading({length:#,#}) '{fileInfo.FullName}'.");
+                                    networkStream.ReadTimeout = Timeout.Infinite;
+                                    using (var fileStream = new FileStream(fileInfo.FullName, FileMode.OpenOrCreate))
+                                    {
+                                        fileStream.Seek(offset, SeekOrigin.Begin);
+                                        fileInfo.Refresh();
+                                        var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
+                                        ($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.").Log();
+                                        //await networkStream.CopyToAsync(fileStream);
+                                        await CopyToAsync(networkStream, fileStream, fileInfo, length, progress);
+                                        fileInfo.Refresh();
+                                        offset = fileInfo.Length;
+                                        ($"Finished downloading({length:#,#}) '{fileInfo.FullName}'.").Log();
+                                    }
                                 }
                             }
-                        }
-
-                        if (offset == length)
-                        {
-                            Console.WriteLine($"All bytes({length:#,#}) are downloaded '{fileInfo.FullName}'.");
-                            File.Move(fileInfo.FullName, fileInfo.FullName.TrimEnd(suffix));
+                            else
+                            {
+                                ($"Unkown status code {response.StatusCode} downloading {fileName}.").Log();
+                            }
                         }
                     }
-                    else
+                    finally
                     {
-                        Console.WriteLine($"Unkown status code {response.StatusCode}.");
+                        if (offset == length)
+                        {
+                            ($"All bytes({length:#,#}) are downloaded '{fileInfo.FullName}'.").Log();
+                            File.Move(fileInfo.FullName, fileInfo.FullName.TrimEnd(suffix));
+                        }
                     }
                 }
                 else
                 {
-                    Console.WriteLine($"File '{fileInfo.FullName}' found, downloading ignored.");
+                    $"File '{fileInfo.FullName}' found, downloading ignored.".Log();
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error downloading.{Environment.NewLine}{ex.ToString()}");
+            $"Error downloading. {fileName}{Environment.NewLine}{ex.ToString()}".Log();
         }
     }
 
@@ -2264,12 +2270,12 @@ public class Sulfate
                 if (percentage > progress)
                 {
                     progress = percentage;
-                    Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.");
+                    ($"Downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.").Log();
                 }
             }
             else
             {
-                Console.WriteLine($"Downloading({fileInfo.Length:#,#}|{length:#,#}|--%) '{fileInfo.FullName}'.");
+                ($"Downloading({fileInfo.Length:#,#}|{length:#,#}|--%) '{fileInfo.FullName}'.").Log();
             }
         } while (count > 0);
     }
