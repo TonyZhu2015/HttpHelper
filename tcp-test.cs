@@ -103,7 +103,7 @@ public class FileBridge
                 }
             }
             while (process);
-            //MessageBox.Show("connection closed");
+            ("connection closed").Log();
         }
         finally
         {
@@ -806,10 +806,13 @@ public static class Extensions
 
     static public IEnumerable<T> Shuffle<T>(this IEnumerable<T> source)
     {
-        if (source == null) throw new ArgumentNullException("source");
+        if (source == null)
+        {
+            throw new ArgumentNullException("source");
+        }
 
-        T[] array = source.ToArray();
-        Random rnd = new Random();
+        var array = source.ToArray();
+        var rnd = new Random();
         for (int n = array.Length; n > 1;)
         {
             int k = rnd.Next(n--); // 0 <= k < n
@@ -823,7 +826,10 @@ public static class Extensions
             }
         }
 
-        foreach (var item in array) yield return item;
+        foreach (var item in array)
+        {
+            yield return item;
+        }
     }
 
     public static string ToString(this byte[] buffer)
@@ -978,15 +984,17 @@ public static class Extensions
 
     public static byte[] ToByteArray(this Image image)
     {
-        var stream = new MemoryStream();
-        try
+        using (var stream = new MemoryStream())
         {
-            image.Save(stream, image.RawFormat);
-            return stream.ToArray();
-        }
-        catch (Exception ex)
-        {
-            return null;
+            try
+            {
+                image.Save(stream, image.RawFormat);
+                return stream.ToArray();
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
         }
     }
 
@@ -1972,12 +1980,12 @@ public static class Extensions
         return (m_theInfo.Attributes & System.IO.FileAttributes.Directory) != 0;
     }
 
-    public static string GetAttributeString(this FileSystemInfo m_theInfo)
+    public static string GetAttributeString(this FileSystemInfo fileSystemInfo)
     {
-        bool fDirectory = (m_theInfo.Attributes & System.IO.FileAttributes.Directory) != 0;
-        bool fReadOnly = (m_theInfo.Attributes & System.IO.FileAttributes.ReadOnly) != 0;
+        var fDirectory = (fileSystemInfo.Attributes & FileAttributes.Directory) != 0;
+        var fReadOnly = (fileSystemInfo.Attributes & FileAttributes.ReadOnly) != 0;
 
-        System.Text.StringBuilder builder = new System.Text.StringBuilder();
+        var builder = new StringBuilder();
 
         if (fDirectory)
         {
@@ -2219,7 +2227,6 @@ public class Sulfate
                                         fileInfo.Refresh();
                                         var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
                                         ($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.").Log();
-                                        //await networkStream.CopyToAsync(fileStream);
                                         await CopyToAsync(networkStream, fileStream, fileInfo, length, progress);
                                         fileInfo.Refresh();
                                         offset = fileInfo.Length;
