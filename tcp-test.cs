@@ -2136,11 +2136,15 @@ public class Sulfate
         {
             foreach (var item in items)
             {
-                ThreadPool.QueueUserWorkItem(async delegate
+                ThreadPool.QueueUserWorkItem((WaitCallback)async delegate
                 {
                     try
                     {
-                        await DownloadAsync(item, folder, cookie);
+                        await this.DownloadAsync((string)item, (string)folder, (string)cookie);
+                    }
+                    catch (Exception ex)
+                    {
+                        $"Error downloading '{item}'{Environment.NewLine}{ex.ToString()}".Log();
                     }
                     finally
                     {
@@ -2154,122 +2158,134 @@ public class Sulfate
         }
     }
 
-    public async Task DownloadAsync(string url, string folder, string cookie = "", string fileName = "")
+    private async Task DownloadAsync(string url, string folder, string cookie = "", string fileName = "")
     {
-        try
+
+        using (var handler = new HttpClientHandler { UseCookies = false })
         {
-            var process = true;
-            while (process)
+            var httpClient = new HttpClient(handler);
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (!string.IsNullOrEmpty(cookie))
             {
-                using (var handler = new HttpClientHandler { UseCookies = false })
+                request.Headers.Add("cookie", cookie);
+            }
+
+            var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                fileName = response.Content.Headers.ContentDisposition.FileName.Trim("\"");
+            }
+
+            if (string.IsNullOrEmpty(fileName))
+            {
+                fileName = url.Hash();
+            }
+
+            var fileInfo = new FileInfo(Path.Combine(folder, fileName));
+            var length = -1L;
+            var header = response.Content.Headers.FirstOrDefault(h => string.Equals(h.Key, "Content-Length", StringComparison.CurrentCultureIgnoreCase));
+            if (!header.Equals(default(KeyValuePair<string, IEnumerable<string>>)))
+            {
+                if (!long.TryParse(header.Value.FirstOrDefault(), out length))
                 {
-                    var httpClient = new HttpClient(handler);
-                    var request = new HttpRequestMessage(HttpMethod.Get, url);
-                    if (!string.IsNullOrEmpty(cookie))
-                    {
-                        request.Headers.Add("cookie", cookie);
-                    }
-
-                    var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-                    if (string.IsNullOrEmpty(fileName))
-                    {
-                        fileName = response.Content.Headers.ContentDisposition.FileName.Trim("\"");
-                    }
-
-                    if (string.IsNullOrEmpty(fileName))
-                    {
-                        fileName = url.Hash();
-                    }
-
-                    var fileInfo = new FileInfo(Path.Combine(folder, fileName));
-                    if (!fileInfo.Exists)
-                    {
-                        var suffix = ".download";
-                        fileInfo = new FileInfo(Path.Combine(folder, $"{fileName}{suffix}"));
-                        var offset = fileInfo.Exists ? fileInfo.Length : 0;
-                        var length = -1L;
-                        var header = response.Content.Headers.FirstOrDefault(h => string.Equals(h.Key, "Content-Length", StringComparison.CurrentCultureIgnoreCase));
-                        if (!header.Equals(default(KeyValuePair<string, IEnumerable<string>>)))
-                        {
-                            if (!long.TryParse(header.Value.FirstOrDefault(), out length))
-                            {
-                                length = -1;
-                            }
-                        }
-
-                        var acceptRanges = response.Headers.AcceptRanges.Any(r => string.Equals(r, "bytes", StringComparison.CurrentCultureIgnoreCase));
-                        if (!acceptRanges)
-                        {
-                            offset = 0;
-                        }
-
-                        try
-                        {
-                            if (offset != length)
-                            {
-                                request = new HttpRequestMessage(HttpMethod.Get, url);
-                                if (!string.IsNullOrEmpty(cookie))
-                                {
-                                    request.Headers.Add("cookie", cookie);
-                                }
-
-                                if (acceptRanges)
-                                {
-                                    request.Headers.Range = new RangeHeaderValue(offset, null);
-                                }
-
-                                response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-                                if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.PartialContent)
-                                {
-                                    using (var networkStream = await response.Content.ReadAsStreamAsync())
-                                    {
-                                        networkStream.ReadTimeout = Timeout.Infinite;
-                                        using (var fileStream = new FileStream(fileInfo.FullName, FileMode.OpenOrCreate))
-                                        {
-                                            fileStream.Seek(offset, SeekOrigin.Begin);
-                                            fileInfo.Refresh();
-                                            var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
-                                            ($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.").Log();
-                                            await CopyToAsync(networkStream, fileStream, fileInfo, length, progress);
-                                            fileInfo.Refresh();
-                                            offset = fileInfo.Length;
-                                            ($"Finished downloading({length:#,#}) '{fileInfo.FullName}'.").Log();
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    ($"Unkown status code {response.StatusCode} downloading {fileName}.").Log();
-                                }
-                            }
-                        }
-                        finally
-                        {
-                            if (offset == length)
-                            {
-                                process = false;
-                                ($"All bytes({length:#,#}) are downloaded '{fileInfo.FullName}'.").Log();
-                                File.Move(fileInfo.FullName, fileInfo.FullName.TrimEnd(suffix));
-                            }
-                        }
-                    }
-                    else
-                    {
-                        process = false;
-                        $"File '{fileInfo.FullName}' found, downloading ignored.".Log();
-                    }
+                    length = -1;
                 }
+            }
 
+            var acceptRanges = response.Headers.AcceptRanges.Any(r => string.Equals(r, "bytes", StringComparison.CurrentCultureIgnoreCase));
+            var process = false;
+            do
+            {
+
+                process = await DownloadAsync(httpClient, fileInfo, acceptRanges, length, url, cookie);
                 if (process)
                 {
-                    Thread.Sleep(1000 * 20);
+                    var interval = new Random().Next(20 * 1000, 40 * 1000);
+                    $"Retry downloading '{fileName}' after {(int)(interval / 1000)}s".Log();
+                    Thread.Sleep(interval);
                 }
+            } while (process);
+        }
+    }
+
+    private async Task<bool> DownloadAsync(HttpClient httpClient, FileInfo fileInfo, bool acceptRanges, long length, string url, string cookie)
+    {
+        var process = true;
+
+        try
+        {
+            if (!fileInfo.Exists)
+            {
+                var suffix = ".download";
+                fileInfo = new FileInfo($"{fileInfo.FullName}{suffix}");
+                var offset = fileInfo.Exists ? fileInfo.Length : 0;
+                if (!acceptRanges)
+                {
+                    offset = 0;
+                }
+
+                try
+                {
+                    if (offset != length)
+                    {
+                        var request = new HttpRequestMessage(HttpMethod.Get, url);
+                        if (!string.IsNullOrEmpty(cookie))
+                        {
+                            request.Headers.Add("cookie", cookie);
+                        }
+
+                        if (acceptRanges)
+                        {
+                            request.Headers.Range = new RangeHeaderValue(offset, null);
+                        }
+
+                        var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                        if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.PartialContent)
+                        {
+                            using (var networkStream = await response.Content.ReadAsStreamAsync())
+                            {
+                                networkStream.ReadTimeout = 5 * 60 * 1000;
+                                using (var fileStream = new FileStream(fileInfo.FullName, FileMode.OpenOrCreate))
+                                {
+                                    fileStream.Seek(offset, SeekOrigin.Begin);
+                                    fileInfo.Refresh();
+                                    var progress = (length != 0 && length != -1) ? (int)(offset * 100 / length) : -1;
+                                    ($"Start downloading({fileInfo.Length:#,#}|{length:#,#}|{progress}%) '{fileInfo.FullName}'.").Log();
+                                    await CopyToAsync(networkStream, fileStream, fileInfo, length, progress);
+                                    fileInfo.Refresh();
+                                    offset = fileInfo.Length;
+                                    ($"Finished downloading({length:#,#}) '{fileInfo.FullName}'.").Log();
+                                }
+                            }
+                        }
+                        else
+                        {
+                            ($"Unkown status code {response.StatusCode} downloading {fileInfo.FullName}.").Log();
+                        }
+                    }
+                }
+                finally
+                {
+                    if (offset == length)
+                    {
+                        process = false;
+                        ($"All bytes({length:#,#}) are downloaded '{fileInfo.FullName}'.").Log();
+                        File.Move(fileInfo.FullName, fileInfo.FullName.TrimEnd(suffix));
+                    }
+                }
+            }
+            else
+            {
+                process = false;
+                $"File '{fileInfo.FullName}' found, downloading ignored.".Log();
             }
         }
         catch (Exception ex)
         {
-            $"Error downloading. {fileName}{Environment.NewLine}{ex.ToString()}".Log();
+            $"Error downloading. {fileInfo.FullName}{Environment.NewLine}{ex.ToString()}".Log();
         }
+
+        return process;
     }
 
     private async Task CopyToAsync(Stream networkStream, Stream fileStream, FileInfo fileInfo, long length, int progress)
