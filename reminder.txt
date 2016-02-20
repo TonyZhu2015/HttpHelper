@@ -30,7 +30,9 @@ Windows RemoteManagement (WinRM) is a feature of Windows Vista that allows admin
 
 Pinyin4net.dll
 
-"C:\Program Files (x86)\MSBuild\14.0\Bin\amd64\csc.exe" /t:library /out:tcp-test.dll tcp-test.cs /r:System.Net.Http.dll
+"C:\Program Files (x86)\MSBuild\14.0\Bin\amd64\csc.exe" /t:library /out:tcp-test.dll tcp-test.cs /r:System.Net.Http.dll && scriptcs d.csx
+
+git remote set-url origin git@github.com:TonyZhu2015/Playground.git
 
 how to run a dns server
 
