@@ -1,3 +1,5 @@
+The port number is an unsigned 16-bit integer, so 65535.
+
 Tokyo Ghoul/Future Diary/stein,gate/death parade/psycho-pass/paranoia-agent/paprika/elfen-lied/monster/darker than black/dead man wonderland/Terro in Resonance/pandora hearts/death note
 
 shutdown /s /t 0
