@@ -1,0 +1,1 @@
+puts File.size("[pseudo] Rick and Morty S02E10 The Wedding Squanchers [1080p] [h.265].mkv")

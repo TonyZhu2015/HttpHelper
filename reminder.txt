@@ -1,3 +1,12 @@
+sudo apt-get install screen
+screen bash
+To detach this terminal session, press
+CTRL + A     release, and then press   D
+screen -list
+screen -r
+screen -r 1245.pts-0.raspberrypi
+CTRL + D   and it will end instantly (no warnings).
+
 The port number is an unsigned 16-bit integer, so 65535.
 
 Tokyo Ghoul/Future Diary/stein,gate/death parade/psycho-pass/paranoia-agent/paprika/elfen-lied/monster/darker than black/dead man wonderland/Terro in Resonance/pandora hearts/death note
