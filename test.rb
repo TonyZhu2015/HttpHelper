@@ -1,1 +1,18 @@
-puts File.size("[pseudo] Rick and Morty S02E10 The Wedding Squanchers [1080p] [h.265].mkv")
+trap("INT") do
+	puts "exit"
+	exit!
+end
+
+
+def run()
+	loop do
+		begin
+			print "a"
+			sleep 2
+		ensure
+			run()
+		end 
+	end
+end
+
+run()
